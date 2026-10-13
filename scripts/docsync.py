@@ -12,8 +12,9 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync doc list          docs of this project
   docsync project list      your projects: using local docs, and declined
   docsync project check | use | decline   for the model: this folder's state, opt in, opt out
-  docsync setup scan        for the model: folders Claude Code has worked in, with their state
   docsync update check | apply [--yes]   newer versions of this skill (git); then setup runs again
+  docsync setup shell | mode | scan     for the model during setup
+  docsync uninstall         remove the docsync command and settings; docs stay
 
 Project: docsync.json at its root, {"name": "<project>", "docs": {"<dir>": {"id": "<doc id>", "name": "<doc name>"}}},
 one folder per doc: <tab>.md, <tab>.blocks.json, <tab>.widget-<id>.jsx, .docsync-state.json.
@@ -1307,6 +1308,51 @@ def setup_mode(args):
     print(json.dumps({"mode": mode, "skill_md": "updated" if new != s else "unchanged"}))
 
 
+def bin_dir():
+    return os.environ.get("XDG_BIN_HOME") or os.path.join(os.path.expanduser("~"), ".local", "bin")
+
+
+def setup_shell(args):
+    """The `docsync` command: a link in ~/.local/bin to this script (mode user)."""
+    if platform.system() == "Windows":
+        print(json.dumps({"link": None, "note": "no link on Windows: run python3 " + os.path.realpath(__file__)}))
+        return
+    d, me = bin_dir(), os.path.realpath(__file__)
+    link = os.path.join(d, "docsync")
+    os.makedirs(d, exist_ok=True)
+    if os.path.lexists(link):
+        if os.path.islink(link) and os.path.realpath(link) == me:
+            pass
+        elif os.path.islink(link):
+            os.remove(link)  # an older link, e.g. to a previous install
+        else:
+            sys.exit(f"{link} exists and is not a link to docsync; move it away, then run setup shell again")
+    if not os.path.lexists(link):
+        os.symlink(me, link)
+    os.chmod(me, os.stat(me).st_mode | 0o111)
+    on_path = d in os.environ.get("PATH", "").split(os.pathsep)
+    shell = os.path.basename(os.environ.get("SHELL", ""))
+    add = None if on_path else (f"fish_add_path {d}" if shell == "fish" else f'export PATH="{d}:$PATH"')
+    rc = {"zsh": "~/.zshrc", "bash": "~/.bashrc", "fish": "~/.config/fish/config.fish"}.get(shell, "your shell's startup file")
+    print(json.dumps({"link": link, "on_path": on_path, "add_to_path": add, "rc_file": None if on_path else rc}))
+
+
+def uninstall(args):
+    """Remove what docsync put outside the skill folder; the docs and their files stay."""
+    removed = []
+    link = os.path.join(bin_dir(), "docsync")
+    if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(__file__):
+        os.remove(link)
+        removed.append(link)
+    p = user_config()
+    if os.path.isdir(os.path.dirname(p)):
+        shutil.rmtree(os.path.dirname(p))
+        removed.append(os.path.dirname(p))
+    for r in removed:
+        say(f"removed {r}")
+    say(f"Left as they are: the docs' local files and each project's docsync.json. To finish, delete the skill: {SKILL_DIR}")
+
+
 def installed_globally():
     """Is this script inside the user's Claude Code skills folder?"""
     conf = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
@@ -1388,8 +1434,10 @@ def main():
     a.add_argument("--yes", action="store_true", help="also a breaking update")
     setup = sub.add_parser("setup", help="for the model during setup").add_subparsers(dest="sub", required=True)
     setup.add_parser("scan", help="folders Claude Code has worked in, with their state (JSON)")
+    setup.add_parser("shell", help="the docsync command: a link in ~/.local/bin (JSON)")
     a = setup.add_parser("mode", help="save who syncs (or reuse the saved choice) and write it into SKILL.md")
     a.add_argument("mode", nargs="?", choices=sorted(MODES))
+    sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     args = p.parse_args()
     args.cmd = args.cmd or "sync"
     for k, v in (("dirs", []), ("force", False)):
@@ -1408,7 +1456,8 @@ def main():
         {"doc": {"add": doc_add, "list": doc_list},
          "project": {"list": project_list, "check": project_check, "use": project_use, "decline": project_decline},
          "update": {"check": update_check, "apply": update_apply},
-         "setup": {"scan": setup_scan, "mode": setup_mode}}.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
+         "setup": {"scan": setup_scan, "mode": setup_mode, "shell": setup_shell},
+         "uninstall": {None: uninstall}}.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
     finally:
         if _live:
             sys.stdout.write("\r\x1b[2K")

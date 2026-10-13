@@ -4,6 +4,8 @@ For the model. Run after installing this skill and again after every update (`do
 
 Requirements: Claude Code logged in with a claude.ai account, the Claude Docs connector on that account, Python 3. No packages to install. `<skill folder>` below is this skill's base directory.
 
+0. **Python.** Run `python3 --version`. If it fails, stop and tell the user to install Python 3 (on macOS: `xcode-select --install` or python.org; on Linux: the system package manager), then rerun setup.
+
 1. **Read the user config**: `~/.config/docsync/config.json` (`$XDG_CONFIG_HOME/docsync/` if set; `%APPDATA%\docsync\` on Windows). Missing = a first install.
 2. **Bring the config up to date.** This version uses config schema 1 (structure in CHANGELOG.md, newest section). If the user config, or the `docsync.json` of any project in its `"projects"`, has an older `"schema"` (or none but other keys), change them to the current structure, following the **Migration** notes in CHANGELOG.md for every version in between. Keep every value the user chose. Set `"schema"` to the current number. Tell the user in one line what you changed.
 3. **Sync mode.** If the config has `"sync"`, run `python3 <skill folder>/scripts/docsync.py setup mode`. Otherwise ask exactly this with AskUserQuestion:
@@ -20,8 +22,7 @@ Requirements: Claude Code logged in with a claude.ai account, the Claude Docs co
    ```
    "I do" → `docsync.py setup mode user`; "Claude does" → `docsync.py setup mode model`.
 4. **That command does the writing:** it saves the mode in the user config and writes the matching description and "Syncing" paragraph into this skill's SKILL.md. Don't edit SKILL.md by hand.
-5. **Mode `user` only — the `docsync` command.** Check whether it exists in the user's shell (`$SHELL -ic 'type docsync'`). If not, add a function to the user's shell startup file and tell them the line and the file, e.g. for zsh `~/.zshrc`, for bash `~/.bashrc`:
-   `docsync() { python3 "<skill folder>/scripts/docsync.py" "$@"; }`
+5. **Mode `user` only — the `docsync` command.** Run `docsync.py setup shell`. It links `~/.local/bin/docsync` to the script and returns JSON. If `on_path` is false, tell the user the one line to add (`add_to_path`) to their shell startup file (`rc_file`); don't edit it yourself. In mode `model` skip this: Claude calls the script by its full path.
 6. **Projects — only if the config has neither `"projects"` nor `"declined"`** (best effort). Run `python3 <skill folder>/scripts/docsync.py setup scan`. If it returns no `unknown` projects (or a `note` that it could not read them), skip: projects will be asked about the first time a task uses their docs. Otherwise ask one multiSelect question with AskUserQuestion; options are the `unknown` projects, `label` and `path` from the scan. For example:
    ```json
    {"questions": [{

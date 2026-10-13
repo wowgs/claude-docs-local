@@ -28,3 +28,11 @@ docsync project list        your projects
 ```
 
 `docsync -h` lists everything.
+
+## Uninstall
+
+```
+docsync uninstall
+```
+
+It removes the `docsync` command and your docsync settings, then tells you the skill folder to delete. Your docs and their local files stay.
