@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.3.0 — 2026-10-13
+
+- A sync checks every tab at once and reads a tab whole only when it changed. A sync with nothing to do on an 8-tab doc took 9.7–10.1 s and takes 1.9–2.0 s (3 runs each).
+- Sync modes `auto` and `auto-force` replace `model`. A Stop hook sends the local edits when Claude finishes a turn, so Claude no longer runs the sync. `auto` syncs at once and hands a conflict or an error back to Claude. `auto-force` pushes with `--force` in the background, and a failure shows up at the end of the next turn. A saved `model` reads as `auto`.
+
 ## 2.2.0 — 2026-10-13
 
 - `docsync setup scan` is back. Setup asks about all the projects again, in groups of at most 4, one question per call, and waits for each answer. The groups are as equal as possible, so no question has a single project unless there is only one.

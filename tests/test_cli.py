@@ -80,8 +80,8 @@ class Cli(Sandbox):
         self.assertEqual(r.returncode, 1)
         self.assertIn("ask the user", r.stderr)
         self.installed("docs-local@wowgs", "docs-local-files@wowgs")
-        self.assertEqual(self.setup("--mode", "model")["mode"], "model")
-        self.assertEqual(self.setup()["mode"], "model")  # the saved choice
+        self.assertEqual(self.setup("--mode", "auto")["mode"], "auto")
+        self.assertEqual(self.setup()["mode"], "auto")  # the saved choice
 
     def test_setup_scan_lists_the_folders_claude_code_has_seen(self):
         os.makedirs(self.path("other"))
@@ -116,12 +116,12 @@ class Cli(Sandbox):
 
     def test_setup_reports_what_is_missing(self):
         self.installed("docs-local@wowgs")
-        out = self.setup("--mode", "model", "--project", self.path("nowhere"), ok=False)
+        out = self.setup("--mode", "auto", "--project", self.path("nowhere"), ok=False)
         self.assertFalse(out["ok"])
         self.assertIn("docs-local-files@wowgs is not installed: claude plugin install docs-local-files@wowgs",
                       out["errors"])
         self.assertIn("not a folder: " + self.path("nowhere"), out["errors"])
-        self.assertIsNone(out["shell"])  # mode model: no shell command
+        self.assertIsNone(out["shell"])  # mode auto: no shell command
 
     def test_shell_command_runs_the_installed_plugin(self):
         out = self.setup("--mode", "user", ok=False)  # nothing installed yet

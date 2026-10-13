@@ -5,7 +5,9 @@ from support import FakeDocs, Sandbox, xml_of
 from docsynclib import files, output, sync, textio
 
 
-class Sync(Sandbox):
+class Base(Sandbox):
+    """A project with one doc on the fake server."""
+
     def setUp(self):
         super().setUp()
         self.fake = FakeDocs()
@@ -32,6 +34,8 @@ class Sync(Sandbox):
     def state(self):
         return files.load_state("docs/d")["tabs"]["t1"]
 
+
+class Sync(Base):
     def test_first_sync_pulls_then_all_is_in_sync(self):
         self.assertEqual(self.run_sync("status"), [("info", "1-intro")])
         self.assertEqual(self.run_sync(), [("pulled", "1-intro")])
@@ -246,3 +250,74 @@ class Sync(Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StopHook(Base):
+    """The Stop hook against the fake server: what it does at the end of a turn in each mode."""
+
+    def setUp(self):
+        super().setUp()
+        from docsynclib import cli, projects
+        self.cli, self.root = cli, os.path.realpath(self.path("proj"))
+        projects.register(self.root)
+        self.run_sync()
+        self.mode("auto")
+
+    def mode(self, m):
+        from docsynclib import projects
+        u = projects.load_user()
+        u["sync"] = m
+        projects.save_user(u)
+
+    def stop(self, **kw):
+        out = self.cli.stop_hook({"hook_event_name": "Stop", "cwd": self.root, **kw})
+        os.chdir(self.root)
+        return out
+
+    def test_nothing_outside_a_project_or_in_mode_user(self):
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited\n")
+        self.assertIsNone(self.cli.stop_hook({"hook_event_name": "Stop", "cwd": self.tmp}))
+        self.mode("user")
+        self.assertIsNone(self.stop())
+        self.assertNotIn("edited", self.fake.tabs["t1"]["xml"])
+
+    def test_no_local_edits_no_request(self):
+        self.fake.calls.clear()
+        self.assertIsNone(self.stop())
+        self.assertEqual(self.fake.calls, [])
+
+    def test_auto_sends_the_local_edits(self):
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited\n")
+        self.assertIsNone(self.stop())
+        self.assertIn("edited", self.fake.tabs["t1"]["xml"])
+
+    def test_auto_hands_a_conflict_to_claude_once(self):
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited here\n")
+        self.fake.edit("t1", "# 1 Intro\n\nedited there")
+        first = self.stop()
+        self.assertEqual(first["decision"], "block")
+        self.assertIn("conflict", first["reason"])
+        again = self.stop(stop_hook_active=True)
+        self.assertNotIn("decision", again)
+        self.assertIn("conflict", again["systemMessage"])
+
+    def test_auto_force_pushes_in_the_background_and_reports_a_failure_later(self):
+        import json, subprocess
+        self.mode("auto-force")
+        started = []
+        saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: started.append((a, k))
+        try:
+            self.assertIsNone(self.stop())  # nothing local: nothing started
+            self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited\n")
+            self.assertIsNone(self.stop())
+            self.assertEqual(started[0][0][0][-1], "push-background")
+            self.write("proj/.docsync-last.json", json.dumps({"rc": 1, "problems": ["boom"]}))
+            self.assertIn("boom", self.stop()["systemMessage"])
+            self.assertIsNone(self.stop())  # shown once
+        finally:
+            subprocess.Popen = saved
+
+    def test_mode_model_becomes_auto(self):
+        from docsynclib import projects
+        self.mode("model")
+        self.assertEqual(projects.load_user()["sync"], "auto")

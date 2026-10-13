@@ -19,7 +19,10 @@ def load_user():
     """{"sync": "user" | "model", "projects": [...]}; migrates the older projects.json."""
     p = user_config()
     if os.path.exists(p):
-        return load_json(p)
+        u = load_json(p)
+        if u.get("sync") == "model":  # 2.2 and older: Claude ran the sync; now a hook does it at the end of a turn
+            u["sync"] = "auto"
+        return u
     old = os.path.join(os.path.dirname(p), "projects.json")
     if os.path.exists(old):
         u = load_json(old)

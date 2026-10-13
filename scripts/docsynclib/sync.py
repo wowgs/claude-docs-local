@@ -328,6 +328,25 @@ def create_doc(config, d, want_name=None):
         create_tab(d, st, doc_id, base)
 
 
+def local_pending(config):
+    """Is there anything local to send, by the files and the state alone (no request to the doc)?
+    Runs in the project root: a doc not created yet, a tab edited, added or deleted here, a diagram edited."""
+    for d, raw in load_cfg(config)["docs"].items():
+        doc_id, _ = entry(raw)
+        if not doc_id:
+            return True
+        if not os.path.isdir(d):
+            continue
+        st = load_state(d)
+        for t in st["tabs"].values():
+            if not os.path.exists(os.path.join(d, t["base"] + ".md")) or local_changed(d, t):
+                return True
+        known = {t["base"] for t in st["tabs"].values()}
+        if any(f.endswith(".md") and f[:-3] not in known for f in os.listdir(d)):
+            return True
+    return False
+
+
 def cmd_sync(args, mode="sync"):
     """mode: sync (direction by freshness), pull, push, status. Runs in the project root."""
     for d, raw in load_cfg(args.config)["docs"].items():

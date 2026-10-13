@@ -23,10 +23,12 @@ Claude Code: plugins docs-local and docs-local-files from the wowgs marketplace;
 that write, except comments. Claude Code updates the plugins (claude plugin update).
 Login: Claude Code's claude.ai login, read on each run and never stored.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
-Output: for people in mode "user", one JSON document in mode "model" (--json / --human override).
+Sync modes: "user" (you run docsync), "auto" (a hook syncs when Claude finishes a turn, and stops on conflicts),
+"auto-force" (a hook pushes in the background when Claude finishes a turn; the local files overwrite the doc).
+Output: for people; one JSON document with --json.
 Exit codes: 0 done, 1 error, 2 conflicts.
 """
-import argparse, json, os, platform, re, shutil, sys
+import argparse, fcntl, json, os, platform, re, shutil, subprocess, sys
 
 from . import output as out
 from .claude import (FILES, PLUGIN, edit_json, decide, hide, installed, lock, project_settings, turn_off, turn_on,
@@ -35,17 +37,20 @@ from .files import slug
 from .mcp import call
 from .projects import (CONFIG, SCHEMA, entry, load_user, project_name, project_of, project_state, projects,
                        save_cfg, save_user, targets, user_config)
-from .sync import cmd_sync
+from .sync import cmd_sync, local_pending
 from .textio import load_json, read, write
 
 MODES = {
     "user": "The user syncs with the `docsync` command. Claude runs it only for `project`, `doc` and `setup` "
             "commands: never sync, pull, push or status, and does not remind about syncing.",
-    "model": "Run `docsync` from the project at the start of each "
-             "user request that involves its docs, and once more after all the work for that request is done. "
-             "It prints JSON: `events`, `conflicts`. Exit code 2 = conflicts: stop, say which tab and why, "
-             "and resolve only as the user decides; 1 = error: show it as is.",
+    "auto": "A hook syncs the local files with the doc when you finish your turn. Never run sync, pull, push or "
+            "status yourself. When the hook reports a conflict or an error, fix the local files if the cause is in "
+            "them. Otherwise tell the user which tab and why, and resolve a conflict only as the user decides.",
+    "auto-force": "A hook pushes the local files to the doc in the background when you finish your turn. The local "
+                  "files overwrite the doc. Never run sync, pull, push or status yourself.",
 }
+LAST = ".docsync-last.json"  # the result of the last background push, at the project root
+SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "docsync.py")
 RESULT = []
 
 
@@ -237,14 +242,71 @@ def setup(args):
         sys.exit(1)
 
 
-def hook(args):
-    """PreToolUse hook on the Docs `create` tool: only comments; tabs and contents are local files."""
+def sync_now(root, force=False):
+    """One sync of a project, in this process, quietly. Returns (exit code, the problems as lines)."""
+    os.chdir(root)
+    out.JSON, out.TTY, out.CONFLICTS = True, False, 0
+    out.EVENTS.clear()
+    a = argparse.Namespace(config=CONFIG, dirs=[], force=force, cmd="push" if force else "sync")
     try:
-        answer = decide(json.load(sys.stdin))
+        cmd_sync(a, a.cmd)
+    except SystemExit as e:
+        return 1, [str(e.code)]
+    problems = [f"{e['doc'] or ''} {e['path']}: {e['detail']}".strip() for e in out.EVENTS if e["kind"] in ("conflict", "warn")]
+    return (2 if out.CONFLICTS else 1 if problems else 0), problems
+
+
+def stop_hook(event):
+    """Stop hook: when Claude finishes a turn in a project with local edits, send them.
+    Mode auto: sync now; a conflict or an error goes back to Claude once, so it fixes the files or tells the user.
+    Mode auto-force: `push --force` in the background; a failure is shown to the user at the end of the next turn."""
+    root = project_of(event.get("cwd") or os.getcwd())
+    mode = load_user().get("sync")
+    if not root or mode not in ("auto", "auto-force"):
+        return None
+    os.chdir(root)
+    last = load_json(LAST) if os.path.exists(LAST) else None
+    if mode == "auto-force":
+        notice = None
+        if last and last.get("rc") and not last.get("shown"):
+            notice = {"systemMessage": "docs-local: the last background push failed: " + "; ".join(last.get("problems", []))}
+            last["shown"] = True
+            write(LAST, json.dumps(last, ensure_ascii=False))
+        if local_pending(CONFIG):
+            subprocess.Popen([sys.executable, SCRIPT, "push-background"], cwd=root, start_new_session=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return notice
+    if not local_pending(CONFIG):
+        return None
+    rc, problems = sync_now(root)
+    if rc == 0:
+        return None
+    text = "docs-local sync " + ("found conflicts" if rc == 2 else "failed") + ": " + "; ".join(problems)
+    if event.get("stop_hook_active"):  # Claude already had one try: tell the user, do not loop
+        return {"systemMessage": text}
+    return {"decision": "block", "reason": text + ". Fix the local files if the cause is in them, otherwise tell "
+                                                  "the user. The sync runs again when you finish."}
+
+
+def push_background(args):
+    """For the auto-force hook: push --force, one at a time per project, the result kept in .docsync-last.json."""
+    root = os.getcwd()
+    with open(os.path.join(root, ".docsync-lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        rc, problems = sync_now(root, force=True)
+    write(os.path.join(root, LAST), json.dumps({"rc": rc, "problems": problems}, ensure_ascii=False))
+
+
+def hook(args):
+    """Claude Code hooks: PreToolUse on the Docs `create` tool (only comments; tabs and contents are local files)
+    and Stop (send the local edits when Claude finishes a turn)."""
+    try:
+        event = json.load(sys.stdin)
     except ValueError:
         return
+    answer = stop_hook(event) if event.get("hook_event_name") == "Stop" else decide(event)
     if answer:
-        print(json.dumps(answer))
+        print(json.dumps(answer, ensure_ascii=False))
 
 
 def uninstall(args):
@@ -336,7 +398,8 @@ def parser():
     a.add_argument("action", nargs="?", choices=["scan"], help="scan: list the folders to ask about (JSON)")
     a.add_argument("--mode", choices=sorted(MODES), help="who syncs (the saved choice when left out)")
     a.add_argument("--project", action="append", default=[], metavar="FOLDER", help="turn local docs on here; repeatable")
-    sub.add_parser("hook", help="for Claude Code: the hook on the Docs create tool")
+    sub.add_parser("hook", help="for Claude Code: the hooks on the Docs create tool and on Stop")
+    sub.add_parser("push-background", help="for the auto-force hook: push --force, result in .docsync-last.json")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     return p
 
@@ -346,6 +409,7 @@ COMMANDS = {
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove},
     "setup": {None: setup},
     "hook": {None: hook},
+    "push-background": {None: push_background},
     "uninstall": {None: uninstall},
 }
 
@@ -358,7 +422,7 @@ def main(argv=None):
             setattr(args, k, v)
     args.config = CONFIG
     if args.cmd in ("sync", "status", "pull", "push"):
-        out.JSON = getattr(args, "json", False) or (load_user().get("sync") == "model" and not getattr(args, "human", False))
+        out.JSON = getattr(args, "json", False)
         if out.JSON:
             out.TTY = False
     try:

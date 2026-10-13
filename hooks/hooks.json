@@ -3,7 +3,31 @@
     "PreToolUse": [
       {
         "matcher": "mcp__claude_ai_Claude_Docs__create",
-        "hooks": [{"type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py", "hook"]}]
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py",
+              "hook"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py",
+              "hook"
+            ],
+            "timeout": 600
+          }
+        ]
       }
     ]
   }
