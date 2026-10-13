@@ -2,7 +2,7 @@
 
 A Claude Code plugin that makes Claude faster and cheaper at editing your claude.ai Docs. You keep reading and editing your docs on claude.ai as before. Claude edits a local markdown copy of each doc instead of changing the doc through the official Docs MCP, and docs-local syncs the copy back to the doc.
 
-docs-local syncs in one of three modes:
+docs-local can be run in one of 3 modes:
 
 - By hand: you run `docsync` when you want to sync.
 - Sync: docs-local syncs when Claude finishes. If a tab also changed in the doc, the sync stops and Claude tells you. Use this mode when other people edit the same docs.
