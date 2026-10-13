@@ -6,11 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py",
-              "hook"
-            ]
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py\"; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" hook; else exec python \"$S\" hook; fi"
           }
         ]
       }
@@ -20,11 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py",
-              "hook"
-            ],
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py\"; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" hook; else exec python \"$S\" hook; fi",
             "timeout": 600
           }
         ]

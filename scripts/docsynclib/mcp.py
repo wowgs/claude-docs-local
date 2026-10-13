@@ -1,5 +1,5 @@
 """The Claude Docs connector: Claude Code's claude.ai login, the connector's MCP endpoint, tool calls."""
-import json, os, platform, subprocess, sys, urllib.error, urllib.request, uuid
+import hashlib, json, os, platform, subprocess, sys, unicodedata, urllib.error, urllib.request, uuid
 
 from .textio import read
 
@@ -12,22 +12,38 @@ _tok = None
 _url = None
 
 
+def keychain_service():
+    """The macOS Keychain item that holds Claude Code's login. As Claude Code 2.1.296 names it: "Claude Code-credentials",
+    plus "-" and the first 8 hex digits of the SHA-256 of the config folder when CLAUDE_CONFIG_DIR is set;
+    CLAUDE_SECURESTORAGE_CONFIG_DIR, when set, replaces that folder (empty: no suffix)."""
+    store = os.environ.get("CLAUDE_SECURESTORAGE_CONFIG_DIR")
+    folder = store if store is not None else os.environ.get("CLAUDE_CONFIG_DIR")
+    if not folder:
+        return "Claude Code-credentials"
+    digest = hashlib.sha256(unicodedata.normalize("NFC", folder).encode("utf-8")).hexdigest()[:8]
+    return f"Claude Code-credentials-{digest}"
+
+
 def token():
-    """Claude Code's claude.ai login, where Claude Code keeps it on this OS (code.claude.com/docs/en/iam)."""
+    """Claude Code's claude.ai login, where Claude Code keeps it (code.claude.com/docs/en/iam): the Keychain on macOS,
+    else, and as the macOS fallback, .credentials.json in the Claude config folder."""
     global _tok
     if _tok:
         return _tok
     conf = os.environ.get("CLAUDE_CONFIG_DIR")
     home_file = os.path.join(conf or os.path.join(os.path.expanduser("~"), ".claude"), ".credentials.json")
     raw = None
-    if platform.system() == "Darwin" and not conf:
-        r = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-                           capture_output=True, text=True)
+    if platform.system() == "Darwin":
+        r = subprocess.run(["security", "find-generic-password", "-s", keychain_service(), "-w"],
+                           capture_output=True, text=True, encoding="utf-8")
         raw = r.stdout if r.returncode == 0 else None  # macOS falls back to the file when the Keychain refused it
     if raw is None and os.path.exists(home_file):
         raw = read(home_file)
     if raw is None:
-        sys.exit("no Claude Code login found: run `claude` and /login with your claude.ai account")
+        where = home_file + (" or the Keychain" if platform.system() == "Darwin" else "")
+        if platform.system() == "Windows":
+            where += " (a login that Claude Code keeps in Windows Credential Manager is not supported yet)"
+        sys.exit(f"no Claude Code login found in {where}: run `claude` and /login with your claude.ai account")
     try:
         _tok = json.loads(raw)["claudeAiOauth"]["accessToken"]
     except (ValueError, KeyError):

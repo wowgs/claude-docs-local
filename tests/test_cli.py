@@ -18,7 +18,7 @@ class Cli(Sandbox):
 
     def run_cli(self, *args, cwd=None, stdin=None):
         return subprocess.run([sys.executable, self.script, *args], cwd=cwd or self.tmp, input=stdin,
-                              capture_output=True, text=True, env=dict(os.environ))
+                              capture_output=True, text=True, encoding="utf-8", env=dict(os.environ))
 
     def run_ok(self, *args, **kw):
         r = self.run_cli(*args, **kw)
@@ -130,11 +130,11 @@ class Cli(Sandbox):
     def test_shell_command_runs_the_installed_plugin(self):
         out = self.setup("--mode", "user", ok=False)  # nothing installed yet
         cmd = out["shell"]["command"]
-        r = subprocess.run([cmd, "project", "list"], capture_output=True, text=True, env=dict(os.environ))
+        r = subprocess.run([cmd, "project", "list"], capture_output=True, text=True, encoding="utf-8", env=dict(os.environ))
         self.assertEqual(r.returncode, 1)
         self.assertIn("not installed in Claude Code", r.stderr)
         self.installed("docs-local@wowgs", "docs-local-files@wowgs")
-        r = subprocess.run([cmd, "project", "list"], capture_output=True, text=True, env=dict(os.environ))
+        r = subprocess.run([cmd, "project", "list"], capture_output=True, text=True, encoding="utf-8", env=dict(os.environ))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.setup()["ok"])  # its own file: rewritten
 

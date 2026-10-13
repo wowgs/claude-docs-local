@@ -6,6 +6,8 @@ import os, sys
 if sys.version_info < (3, 9):
     sys.exit(f"docsync needs Python 3.9 or newer; this is {sys.version.split()[0]}")
 
+for stream in (sys.stdout, sys.stderr):  # UTF-8 out even where the platform's default is not (Windows pipes, C locale)
+    stream.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))  # also when run through the ~/.local/bin link
 
 from docsynclib.cli import main  # noqa: E402

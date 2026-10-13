@@ -28,7 +28,7 @@ Sync modes: "user" (you run docsync), "auto" (a hook syncs when Claude finishes 
 Output: for people; one JSON document with --json.
 Exit codes: 0 done, 1 error, 2 conflicts.
 """
-import argparse, fcntl, json, os, platform, re, shutil, subprocess, sys
+import argparse, json, os, platform, re, shutil, subprocess, sys
 
 from . import output as out
 from .claude import (FILES, PLUGIN, edit_json, decide, hide, installed, lock, project_settings, turn_off, turn_on,
@@ -149,7 +149,7 @@ import json, os, sys
 base = os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR") or os.path.join(
     os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "plugins")
 try:
-    recs = json.load(open(os.path.join(base, "installed_plugins.json")))["plugins"]["{PLUGIN}"]
+    recs = json.load(open(os.path.join(base, "installed_plugins.json"), encoding="utf-8"))["plugins"]["{PLUGIN}"]
     root = next((r for r in recs if r.get("scope") == "user"), recs[0])["installPath"]
 except (OSError, ValueError, KeyError, IndexError, TypeError):
     sys.exit("docs-local is not installed in Claude Code: claude plugin install {PLUGIN}")
@@ -292,8 +292,13 @@ def stop_hook(event):
 def push_background(args):
     """For the auto-force hook: push --force, one at a time per project, the result kept in .docsync-last.json."""
     root = os.getcwd()
-    with open(os.path.join(root, ".docsync-lock"), "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with open(os.path.join(root, ".docsync-lock"), "w", encoding="utf-8") as lock:
+        try:
+            import fcntl
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except ImportError:  # Windows has no fcntl
+            import msvcrt
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
         rc, problems = sync_now(root, force=True)
     write(os.path.join(root, LAST), json.dumps({"rc": rc, "problems": problems}, ensure_ascii=False))
 

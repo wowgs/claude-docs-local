@@ -89,3 +89,22 @@ class Changes(Sandbox):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Keychain(unittest.TestCase):
+    def test_service_name_follows_the_config_folder(self):
+        from docsynclib import mcp
+        import hashlib
+        saved = {k: os.environ.pop(k, None) for k in ("CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR")}
+        try:
+            self.assertEqual(mcp.keychain_service(), "Claude Code-credentials")
+            os.environ["CLAUDE_CONFIG_DIR"] = "/Users/me/.claude-work"
+            self.assertEqual(mcp.keychain_service(),
+                             "Claude Code-credentials-" + hashlib.sha256(b"/Users/me/.claude-work").hexdigest()[:8])
+            os.environ["CLAUDE_SECURESTORAGE_CONFIG_DIR"] = ""
+            self.assertEqual(mcp.keychain_service(), "Claude Code-credentials")
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None)
+                if v is not None:
+                    os.environ[k] = v
