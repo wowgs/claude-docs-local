@@ -2,6 +2,10 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.5.3 — 2026-10-13
+
+- No hook on Bash calls any more. It denied every command that named `docsync` other than `project`, `doc`, `setup` and help: also a `grep` for the word, a path to the script, and a command run in another folder from a project's session. The skill never names the sync commands, so Claude has no reason to run them.
+
 ## 2.5.2 — 2026-10-13
 
 - The install command installs both plugins. SETUP.md only configures: sync mode, projects, then the setup command, which still reports a missing plugin.

@@ -2,7 +2,7 @@
 the hook) is on everywhere; docs-local-files (the skill that says the docs are local) is off in user settings and
 on in each project's .claude/settings.local.json, where the Docs tools that write are also off, except comments:
 `create` stays, and the hook lets it make only comments (object "utterance")."""
-import json, os, re
+import json, os
 
 from .projects import project_of, register, unregister
 from .textio import load_json, write
@@ -101,22 +101,6 @@ def decide(call_input):
     if call_input.get("tool_input", {}).get("object") == "utterance":
         return None
     return deny("this project's docs are local files; edit those instead (Docs tools may only write comments here)")
-
-
-DOCSYNC_CALL = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?docsync(?:\.py)?(?=$|[\s;&|)`])((?:\s+[^\s;&|)`]+)?)")
-CLAUDE_MAY = {"project", "doc", "setup", "-h", "--help"}  # the docsync commands Claude runs itself
-
-
-def guard(call_input):
-    """The hook's answer for one Bash call: in a project Claude never syncs (the user does, or the Stop hook),
-    so a docsync call other than project, doc, setup or help is denied. None lets the call through."""
-    if not project_of(call_input.get("cwd") or os.getcwd()):
-        return None
-    for m in DOCSYNC_CALL.finditer((call_input.get("tool_input") or {}).get("command", "")):
-        if m.group(1).strip() not in CLAUDE_MAY:
-            return deny("Claude does not run docsync sync, pull, push or status. The user syncs, or a hook does when "
-                        "you finish your turn: see `sync` in `docsync project check`. Just edit the local files.")
-    return None
 
 
 def installed(plugin_id):

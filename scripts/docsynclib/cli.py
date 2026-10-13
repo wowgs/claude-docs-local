@@ -32,7 +32,7 @@ Exit codes: 0 done, 1 error, 2 conflicts.
 import argparse, json, os, platform, re, shutil, subprocess, sys, time
 
 from . import output as out
-from .claude import (FILES, PLUGIN, edit_json, decide, guard, hide, installed, lock, project_settings, turn_off,
+from .claude import (FILES, PLUGIN, edit_json, decide, hide, installed, lock, project_settings, turn_off,
                      turn_on, unhide, unlock, user_settings)
 from .files import slug
 from .mcp import call
@@ -333,8 +333,6 @@ def hook(args):
         answer = session_start(event)
     elif event.get("hook_event_name") == "Stop":
         answer = stop_hook(event)
-    elif event.get("tool_name") == "Bash":
-        answer = guard(event)
     else:
         answer = decide(event)
     if answer:

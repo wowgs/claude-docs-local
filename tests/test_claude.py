@@ -87,31 +87,6 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class Guard(Sandbox):
-    def setUp(self):
-        super().setUp()
-        self.proj = self.path("proj")
-        os.makedirs(self.proj)
-        c.turn_on(self.proj)
-
-    def ask(self, command, cwd=None):
-        return c.guard({"tool_name": "Bash", "cwd": cwd or self.proj, "tool_input": {"command": command}})
-
-    def test_claude_may_not_sync_in_a_project(self):
-        for cmd in ("docsync", "docsync sync", "docsync status", "docsync push --force", "docsync --json",
-                    "cd docs && docsync; echo $?", "python3 /x/scripts/docsync.py pull", "docsync push-background"):
-            self.assertIsNotNone(self.ask(cmd), cmd)
-
-    def test_project_doc_setup_and_help_pass(self):
-        for cmd in ("docsync project check", "docsync doc add https://claude.ai/x", "docsync setup scan",
-                    "docsync -h", "cat docsync.json", "ls docs; grep -c x docsync.json", "echo hi"):
-            self.assertIsNone(self.ask(cmd), cmd)
-
-    def test_outside_a_project_everything_passes(self):
-        os.makedirs(self.path("other"))
-        self.assertIsNone(self.ask("docsync sync", cwd=self.path("other")))
-
-
 class SessionStart(Sandbox):
     def test_writes_a_projects_settings_only_when_they_are_wrong(self):
         from docsynclib import cli
