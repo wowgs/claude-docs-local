@@ -2,7 +2,13 @@
 
 A Claude Code plugin that makes Claude faster and cheaper at editing your claude.ai Docs. You keep reading and editing your docs on claude.ai as before. Claude edits a local markdown copy of each doc instead of changing the doc through the official Docs MCP, and docs-local syncs the copy back to the doc.
 
-The sync has two modes. Sync stops when a tab changed in the doc too, so it is safe when other people edit the same docs. Push overwrites the doc with the local copy, for docs that only you edit. Either way a changed tab is rewritten whole, so comments on the replaced text lose their anchor.
+docs-local syncs in one of three modes:
+
+- By hand: you run `docsync` when you want to sync.
+- Sync: docs-local syncs when Claude finishes. If a tab also changed in the doc, the sync stops and Claude tells you. Use this mode when other people edit the same docs.
+- Push: docs-local pushes in the background when Claude finishes. The local copy overwrites the doc. Use this mode for docs that only you edit.
+
+A sync or a push rewrites each changed tab whole. Comments on the replaced text lose their anchor.
 
 Works only with Docs artifacts. Diagrams and charts sync, images are not supported.
 
