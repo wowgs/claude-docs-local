@@ -7,7 +7,7 @@ description: Work with claude.ai Docs as local markdown files. Use whenever a ta
 
 For docs that **one person** edits. With several editors, their changes and the local copy collide (conflicts), and a sync rewrites whole tabs, so comments on rewritten text lose their anchor.
 
-The local copy is the source of truth: Claude edits the local files, never the doc through Docs tools. The script is `scripts/docsync.py` in this skill's folder. Set up once after installing or updating: [SETUP.md](SETUP.md).
+The local copy is the source of truth: Claude edits the local files, never the doc through Docs tools. The script is `scripts/docsync.py` in this skill's folder. It needs Python 3.9 or newer, standard library only: run it with `python3`, or with `python` where there is no `python3` (Windows). If neither command exists, or the script says its Python is too old, stop and tell the user to install Python 3.9 or newer. Set up once after installing or updating: [SETUP.md](SETUP.md).
 
 ## Which projects
 

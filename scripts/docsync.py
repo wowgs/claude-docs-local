@@ -1318,7 +1318,7 @@ def bin_dir():
 def setup_shell(args):
     """The `docsync` command: a link in ~/.local/bin to this script (mode user)."""
     if platform.system() == "Windows":
-        print(json.dumps({"link": None, "note": "no link on Windows: run python3 " + os.path.realpath(__file__)}))
+        print(json.dumps({"link": None, "note": "no link on Windows: run python " + os.path.realpath(__file__)}))
         return
     d, me = bin_dir(), os.path.realpath(__file__)
     link = os.path.join(d, "docsync")
