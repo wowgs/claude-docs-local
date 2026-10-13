@@ -8,7 +8,8 @@ ROOT_VAR = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([^\s\"')`]+)")
 
 
 def text(*p):
-    return open(os.path.join(REPO, *p), encoding="utf-8").read()
+    with open(os.path.join(REPO, *p), encoding="utf-8") as f:
+        return f.read()
 
 
 class Paths(unittest.TestCase):
