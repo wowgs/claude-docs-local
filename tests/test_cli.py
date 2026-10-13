@@ -33,7 +33,7 @@ class Cli(Sandbox):
     def test_project_on_check_list_off(self):
         proj = self.path("proj")
         check = json.loads(self.run_ok("project", "check", cwd=proj))
-        self.assertEqual((check["state"], check["setup"], check["sync"]), ("unknown", False, None))
+        self.assertEqual((check["state"], check["setup"]), ("unknown", False))
         self.assertEqual(json.loads(self.run_ok("project", "use", cwd=proj))["root"], proj)
         os.makedirs(self.path("proj/sub"))
         self.assertEqual(json.loads(self.run_ok("project", "check", cwd=self.path("proj/sub")))["root"], proj)
@@ -113,7 +113,6 @@ class Cli(Sandbox):
         self.assertIn("start a new Claude Code session (or run /reload-plugins) in: " + proj, out["todo"])
         check = json.loads(self.run_ok("project", "check", cwd=proj))
         self.assertEqual((check["state"], check["setup"]), ("local", True))
-        self.assertTrue(check["sync"].startswith("The user syncs"))
         again = self.setup()  # nothing new: no session to restart
         self.assertTrue(again["ok"])
         self.assertFalse(any("new Claude Code session" in t for t in again["todo"]))

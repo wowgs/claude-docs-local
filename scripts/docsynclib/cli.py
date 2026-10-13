@@ -1,7 +1,8 @@
 """docsync — keep claude.ai Docs as local markdown files (the source of truth) and sync them.
 
-For docs that one person edits. Several people editing the same doc lead to conflicts, and a push
-rewrites a whole tab, so comments on the replaced text lose their anchor.
+A sync is safe when several people edit a doc: a tab changed both here and in the doc is a conflict, and nothing
+is overwritten. push --force (mode auto-force) lets the local files win. A changed tab is rewritten whole, so comments
+on the replaced text lose their anchor.
 
   docsync [sync]            sync the project you are in; in a folder that holds projects, those;
                             elsewhere, all your projects
@@ -10,7 +11,7 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync doc add <link> [dir]   set up a doc in this project (docs/<name>/ by default) and pull it
   docsync doc list          docs of this project
   docsync project list      your projects
-  docsync project check | use | remove   for the model: this folder's state, turn local docs on, off
+  docsync project check | use | remove   for /docs-local: this folder's state, turn local docs on, off
   docsync setup scan        for the model during setup: folders Claude Code has worked in
   docsync setup --mode user|auto|auto-force [--project <folder>]...   for the model during setup
   docsync uninstall         remove the docsync command and settings; docs stay
@@ -28,11 +29,11 @@ Sync modes: "user" (you run docsync), "auto" (a hook syncs when Claude finishes 
 Output: for people; one JSON document with --json.
 Exit codes: 0 done, 1 error, 2 conflicts.
 """
-import argparse, json, os, platform, re, shutil, subprocess, sys
+import argparse, json, os, platform, re, shutil, subprocess, sys, time
 
 from . import output as out
-from .claude import (FILES, PLUGIN, edit_json, decide, hide, installed, lock, project_settings, turn_off, turn_on,
-                     unhide, unlock, user_settings)
+from .claude import (FILES, PLUGIN, edit_json, decide, guard, hide, installed, lock, project_settings, turn_off,
+                     turn_on, unhide, unlock, user_settings)
 from .files import slug
 from .mcp import call
 from .projects import (CONFIG, SCHEMA, entry, load_user, project_name, project_of, project_state, projects,
@@ -40,16 +41,9 @@ from .projects import (CONFIG, SCHEMA, entry, load_user, project_name, project_o
 from .sync import cmd_sync, local_pending
 from .textio import load_json, read, write
 
-MODES = {
-    "user": "The user syncs with the `docsync` command. Claude runs it only for `project`, `doc` and `setup` "
-            "commands: never sync, pull, push or status, and does not remind about syncing.",
-    "auto": "A hook syncs the local files with the doc when you finish your turn. Never run sync, pull, push or "
-            "status yourself. When the hook reports a conflict or an error, fix the local files if the cause is in "
-            "them. Otherwise tell the user which tab and why, and resolve a conflict only as the user decides.",
-    "auto-force": "A hook pushes the local files to the doc in the background when you finish your turn. The local "
-                  "files overwrite the doc. Never run sync, pull, push or status yourself.",
-}
-LAST = ".docsync-last.json"  # the result of the last background push, at the project root
+MODES = ("user", "auto", "auto-force")  # who syncs: the user, the Stop hook, the Stop hook with push --force
+LAST = ".docsync-last.json"  # the last background push at the project root: {"running", "started"}, then its result
+STUCK_S = 600  # a push still "running" after this long is reported as not finished
 SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "docsync.py")
 RESULT = []
 
@@ -112,14 +106,20 @@ def project_list(args):
 
 
 def project_check(args):
-    """For the model: the state of the current folder, one word plus the project root; whether setup ran, and
-    the sync rule for the mode it chose. A project's Claude Code settings are rewritten here, so a newer version
-    that Claude Code installed brings its settings in on first use."""
+    """For /docs-local and setup: the state of the current folder, one word plus the project root, and whether
+    setup ran."""
     state, root = project_state(os.getcwd())
     if root:
         edit_json(project_settings(root), lock)
-    mode = load_user().get("sync")
-    print(json.dumps({"state": state, "root": root, "setup": mode in MODES, "sync": MODES.get(mode)}))
+    print(json.dumps({"state": state, "root": root, "setup": load_user().get("sync") in MODES}))
+
+
+def session_start(event):
+    """SessionStart hook: a project's Claude Code settings written again, so a newer version that Claude Code
+    installed brings its settings in. Nothing is written when they are already right."""
+    root = project_of(event.get("cwd") or os.getcwd())
+    if root:
+        edit_json(project_settings(root), lock)
 
 
 def project_use(args):
@@ -269,11 +269,14 @@ def stop_hook(event):
     last = load_json(LAST) if os.path.exists(LAST) else None
     if mode == "auto-force":
         notice = None
-        if last and last.get("rc") and not last.get("shown"):
-            notice = {"systemMessage": "docs-local: the last background push failed: " + "; ".join(last.get("problems", []))}
+        stuck = last and last.get("running") and time.time() - last.get("started", 0) > STUCK_S
+        if last and (last.get("rc") or stuck) and not last.get("shown"):
+            why = "did not finish" if stuck else "failed: " + "; ".join(last.get("problems", []))
+            notice = {"systemMessage": "docs-local: the last background push " + why}
             last["shown"] = True
             write(LAST, json.dumps(last, ensure_ascii=False))
-        if local_pending(CONFIG):
+        if local_pending(CONFIG) and not (last and last.get("running") and not stuck):
+            write(LAST, json.dumps({"running": True, "started": time.time()}))
             subprocess.Popen([sys.executable, SCRIPT, "push-background"], cwd=root, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return notice
@@ -299,7 +302,10 @@ def push_background(args):
         except ImportError:  # Windows has no fcntl
             import msvcrt
             msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        rc, problems = sync_now(root, force=True)
+        try:
+            rc, problems = sync_now(root, force=True)
+        except Exception as e:  # any crash still ends in a result, so the marker never stays "running"
+            rc, problems = 1, [f"{type(e).__name__}: {e}"]
     write(os.path.join(root, LAST), json.dumps({"rc": rc, "problems": problems}, ensure_ascii=False))
 
 
@@ -310,7 +316,14 @@ def hook(args):
         event = json.load(sys.stdin)
     except ValueError:
         return
-    answer = stop_hook(event) if event.get("hook_event_name") == "Stop" else decide(event)
+    if event.get("hook_event_name") == "SessionStart":
+        answer = session_start(event)
+    elif event.get("hook_event_name") == "Stop":
+        answer = stop_hook(event)
+    elif event.get("tool_name") == "Bash":
+        answer = guard(event)
+    else:
+        answer = decide(event)
     if answer:
         print(json.dumps(answer, ensure_ascii=False))
 

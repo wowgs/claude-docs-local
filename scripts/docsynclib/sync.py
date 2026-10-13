@@ -52,7 +52,7 @@ def parallel(fn, items):
 
 
 def read_rev(doc_id, node, rev):
-    """A tab's current rev without its text: the changes since the rev we hold, which are none when nothing
+    """A tab's current rev without its text: the changes since the rev in the local state, which are none when nothing
     changed. None when the doc gives no complete answer; then the caller reads the whole tab."""
     o = call("read", {"ref": {"object": "node", "id": node}, "container": C(doc_id), "engine": "prose",
                       "payload": {"kind": "view", "sinceRev": rev}}, soft=True)
@@ -66,6 +66,7 @@ def prefetch(d, st, doc_id):
     Returns (remote_tabs result, {node: full data}, {node: rev}, {widget id: value or None})."""
     known = [t for t in st["tabs"].values() if os.path.exists(os.path.join(d, t["base"] + ".md"))]
     wids = [w for t in known for w, info in t.get("widgets", {}).items() if os.path.exists(os.path.join(d, info["file"]))]
+    out.status(f"checking {len(known)} tab" + ("s" if len(known) != 1 else "") if known else "reading the doc")
 
     def job(j):
         kind, x = j
@@ -84,6 +85,8 @@ def prefetch(d, st, doc_id):
     in_doc = {node for _, _, node in res[0][1]}  # a tab deleted in the doc is not read: the loop handles it
     need = [t["node"] for t in known if t["node"] in in_doc
             and (revs[t["node"]] != t["rev"] or local_hash(d, t["base"]) != t["hash"])]
+    if need:
+        out.status(f"reading {len(need)} changed tab" + ("s" if len(need) != 1 else ""))
     full = dict(zip(need, parallel(lambda n: read_node(doc_id, n), need)))
     return res[0], full, revs, widgets
 
@@ -355,7 +358,6 @@ def cmd_sync(args, mode="sync"):
         doc_id, want_name = entry(raw)
         out.doc_begin(d, want_name)
         out.CTX["tab"] = None
-        out.status("reading the doc")
         if not doc_id:
             if mode == "status":
                 out.ev("info", d, "new doc, will be created")
@@ -410,7 +412,6 @@ def cmd_sync(args, mode="sync"):
                 elif mode in ("sync", "pull"):
                     pull_tab(d, st, doc_id, tab_id, name, node)
                 continue
-            out.status("checking", t['base'])
             if sync_widgets(d, st, doc_id, t, mode, args.force, fetched):
                 continue
             data = full.get(node)

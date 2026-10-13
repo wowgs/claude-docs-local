@@ -1,18 +1,14 @@
 ---
 name: docs-local
-description: Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs artifact, or sets docs up for local work.
+description: This project's claude.ai Docs are local markdown files. Read and edit those, never the doc through the Docs tools. Load this skill before you read or change a Docs artifact here.
 user-invocable: false
 ---
 
 # Docs as local files
 
-Edit a doc's local files, never the doc through Docs tools.
+`docsync.json` in the project root lists the local docs: each folder with its doc id. A doc the task needs that is not local yet: `docsync doc add <link>`, without asking.
 
-## Workflow
-
-1. Run `docsync project check` in the working folder, once per session. A doc the task needs that is not local yet: `docsync doc add <link>`, without asking.
-2. Edit the files (below). Docs tools write only comments here: reply in a comment thread with them, and make the edit a comment asks for in the files.
-3. **Sync:** follow `sync` from `project check`.
+The Docs tools write only comments here. Reply in a comment thread with them, and make the edit that a comment asks for in the files.
 
 ## Files
 

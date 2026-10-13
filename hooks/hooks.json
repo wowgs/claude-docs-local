@@ -9,6 +9,15 @@
             "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py\"; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" hook; else exec python \"$S\" hook; fi"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "IN=$(cat); case \"$IN\" in *docsync*) ;; *) exit 0 ;; esac; S=\"${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py\"; if command -v python3 >/dev/null 2>&1; then P=python3; else P=python; fi; printf '%s' \"$IN\" | \"$P\" \"$S\" hook"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -18,6 +27,16 @@
             "type": "command",
             "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py\"; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" hook; else exec python \"$S\" hook; fi",
             "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "S=\"${CLAUDE_PLUGIN_ROOT}/scripts/docsync.py\"; if command -v python3 >/dev/null 2>&1; then exec python3 \"$S\" hook; else exec python \"$S\" hook; fi"
           }
         ]
       }

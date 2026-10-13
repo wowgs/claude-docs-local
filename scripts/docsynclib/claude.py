@@ -2,7 +2,7 @@
 the hook) is on everywhere; docs-local-files (the skill that says the docs are local) is off in user settings and
 on in each project's .claude/settings.local.json, where the Docs tools that write are also off, except comments:
 `create` stays, and the hook lets it make only comments (object "utterance")."""
-import json, os
+import json, os, re
 
 from .projects import project_of, register, unregister
 from .textio import load_json, write
@@ -18,12 +18,14 @@ DENY = [DOCS_TOOL + t for t in ("batch", "update", "delete")]
 def edit_json(path, change):
     """Change a JSON settings file in place; an empty result removes the file."""
     s = load_json(path) if os.path.exists(path) else {}
+    before = json.dumps(s, sort_keys=True)
     change(s)
-    if s:
+    if not s:
+        if os.path.exists(path):
+            os.remove(path)
+    elif json.dumps(s, sort_keys=True) != before or not os.path.exists(path):  # unchanged: not written again
         os.makedirs(os.path.dirname(path), exist_ok=True)
         write(path, json.dumps(s, ensure_ascii=False, indent=2) + "\n")
-    elif os.path.exists(path):
-        os.remove(path)
 
 
 def prune(s, *keys):
@@ -85,6 +87,11 @@ def turn_off(root):
     unregister(root)
 
 
+def deny(reason):
+    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                   "permissionDecisionReason": "docs-local: " + reason}}
+
+
 def decide(call_input):
     """The hook's answer for one Docs `create` call: None lets it through, else a deny.
     Outside projects everything passes; in a project only comments (object "utterance")."""
@@ -93,10 +100,23 @@ def decide(call_input):
         return None
     if call_input.get("tool_input", {}).get("object") == "utterance":
         return None
-    return {"hookSpecificOutput": {
-        "hookEventName": "PreToolUse", "permissionDecision": "deny",
-        "permissionDecisionReason": "docs-local: this project's docs are local files; edit those instead "
-                                    "(Docs tools may only write comments here)"}}
+    return deny("this project's docs are local files; edit those instead (Docs tools may only write comments here)")
+
+
+DOCSYNC_CALL = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?docsync(?:\.py)?(?=$|[\s;&|)`])((?:\s+[^\s;&|)`]+)?)")
+CLAUDE_MAY = {"project", "doc", "setup", "-h", "--help"}  # the docsync commands Claude runs itself
+
+
+def guard(call_input):
+    """The hook's answer for one Bash call: in a project Claude never syncs (the user does, or the Stop hook),
+    so a docsync call other than project, doc, setup or help is denied. None lets the call through."""
+    if not project_of(call_input.get("cwd") or os.getcwd()):
+        return None
+    for m in DOCSYNC_CALL.finditer((call_input.get("tool_input") or {}).get("command", "")):
+        if m.group(1).strip() not in CLAUDE_MAY:
+            return deny("Claude does not run docsync sync, pull, push or status. The user syncs, or a hook does when "
+                        "you finish your turn: see `sync` in `docsync project check`. Just edit the local files.")
+    return None
 
 
 def installed(plugin_id):

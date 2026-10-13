@@ -15,12 +15,12 @@ Once, after `claude plugin install docs-local --marketplace https://wowgs.uk/plu
      "multiSelect": false,
      "options": [
        {"label": "I do", "description": "You run `docsync` yourself when you want. Claude only edits the local files."},
-       {"label": "Automatically, stop on conflicts", "description": "When Claude finishes a turn, a sync sends the local edits. If the doc also changed, Claude stops and tells you."},
-       {"label": "Automatically, local files win", "description": "When Claude finishes a turn, the local edits are pushed in the background and overwrite the doc."}
+       {"label": "Sync", "description": "When Claude finishes a turn, a sync sends the local edits. Safe when other people edit the same docs: if a tab changed in the doc too, Claude stops and tells you."},
+       {"label": "Push", "description": "When Claude finishes a turn, the local edits are pushed in the background and overwrite the doc. For docs that only you edit."}
      ]
    }]}
    ```
-   "I do" → `user`; "Automatically, stop on conflicts" → `auto`; "Automatically, local files win" → `auto-force`.
+   "I do" → `user`; "Sync" → `auto`; "Push" → `auto-force`.
 3. **Projects.** Only if step 2 asked. Run `docsync setup scan` and take its `unknown` projects. If there are none, or it returns a `note`, skip this step. Otherwise ask with AskUserQuestion:
    - Split the projects into the fewest groups of at most 4. Make the groups as equal as possible: 5 = 3 + 2, 8 = 4 + 4, 9 = 3 + 3 + 3.
    - Ask one group per AskUserQuestion call, with one question in it. Wait for the answer before you ask about the next group.

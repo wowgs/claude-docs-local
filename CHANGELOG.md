@@ -2,6 +2,14 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.4.0 — 2026-10-13
+
+- Claude does not run the sync. In a project, a hook denies `docsync` sync, pull, push and status, and the skill no longer mentions the sync. The user syncs, or the Stop hook does.
+- A SessionStart hook writes a project's Claude Code settings again, instead of Claude running `docsync project check`. The settings file is written only when it changes.
+- The background push marks itself as running. A push that failed or did not finish shows up at the end of the next turn.
+- The live status line says what the sync really does: checking N tabs, reading N changed tabs.
+- `bench/`: the benchmark against the Docs tools.
+
 ## 2.3.0 — 2026-10-13
 
 - A sync checks every tab at once and reads a tab whole only when it changed. A sync with nothing to do on an 8-tab doc took 9.7–10.1 s and takes 1.9–2.0 s (3 runs each).

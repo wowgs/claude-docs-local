@@ -317,6 +317,35 @@ class StopHook(Base):
         finally:
             subprocess.Popen = saved
 
+    def test_auto_force_marks_the_push_and_does_not_start_a_second_one(self):
+        import json, subprocess, time
+        self.mode("auto-force")
+        started = []
+        saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: started.append(a)
+        try:
+            self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited\n")
+            self.assertIsNone(self.stop())
+            self.assertTrue(json.load(open(".docsync-last.json", encoding="utf-8"))["running"])
+            self.assertIsNone(self.stop())  # still running: no second push
+            self.assertEqual(len(started), 1)
+            self.write("proj/.docsync-last.json", json.dumps({"running": True, "started": time.time() - 3600}))
+            self.assertIn("did not finish", self.stop()["systemMessage"])
+            self.assertEqual(len(started), 2)  # a stuck push does not hold the next one back
+        finally:
+            subprocess.Popen = saved
+
+    def test_a_crashing_background_push_still_writes_its_result(self):
+        import json
+        saved = self.cli.sync_now
+        self.cli.sync_now = lambda root, force=False: 1 / 0
+        try:
+            self.cli.push_background(None)
+        finally:
+            self.cli.sync_now = saved
+        last = json.load(open(os.path.join(self.root, ".docsync-last.json"), encoding="utf-8"))
+        self.assertEqual(last["rc"], 1)
+        self.assertIn("ZeroDivisionError", last["problems"][0])
+
     def test_mode_model_becomes_auto(self):
         from docsynclib import projects
         self.mode("model")
