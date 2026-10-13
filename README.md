@@ -14,7 +14,7 @@ Paste this into Claude Code:
 Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json`, then follow the plugin's SETUP.md.
 ```
 
-Setup asks one or two questions: who syncs (you with `docsync`, or Claude), and which of your projects keep their docs as local files. Later, turn on another project by typing `/docs-local` in it, and turn one off with `/docs-local remove`; then `/reload-plugins`.
+Setup asks who syncs (you with `docsync`, or Claude) and whether the folder you are in keeps its docs as local files. Turn on another project by typing `/docs-local` in it, and turn one off with `/docs-local remove`; the change applies in the next session there, or after `/reload-plugins`.
 
 In a project that is on, Claude cannot write to its docs through the Docs tools, only comments: it edits the local files. In other projects Claude does not see the skill.
 

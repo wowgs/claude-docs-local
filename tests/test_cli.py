@@ -66,51 +66,88 @@ class Cli(Sandbox):
         self.assertEqual(no["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(self.run_ok("hook", stdin="not json"), "")
 
-    def test_setup_mode_hands_the_rule_to_project_check(self):
-        self.assertEqual(json.loads(self.run_ok("setup", "mode", "model"))["mode"], "model")
-        check = json.loads(self.run_ok("project", "check", cwd=self.path("proj")))
-        self.assertTrue(check["setup"])
-        self.assertTrue(check["sync"].startswith("Run `docsync` from the project"))
-        self.run_ok("setup", "mode", "user")
-        self.assertEqual(json.loads(self.run_ok("setup", "mode"))["mode"], "user")
+    def installed(self, *ids):
+        self.write("claude/plugins/installed_plugins.json", json.dumps({"version": 2, "plugins": {
+            i: [{"scope": "user", "installPath": self.skill, "version": "9.9.9"}] for i in ids}}))
 
-    def test_setup_shell_command_finds_the_installed_plugin(self):
-        out = json.loads(self.run_ok("setup", "shell"))
-        self.assertEqual(out["link"], os.path.join(self.env["XDG_BIN_HOME"], "docsync"))
-        r = subprocess.run([out["link"], "project", "list"], capture_output=True, text=True, env=dict(os.environ))
+    def setup(self, *args, ok=True):
+        r = self.run_cli("setup", *args, cwd=self.path("proj"))
+        self.assertEqual(r.returncode, 0 if ok else 1, r.stderr)
+        return json.loads(r.stdout)
+
+    def test_setup_needs_a_mode_once(self):
+        r = self.run_cli("setup")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("ask the user", r.stderr)
+        self.installed("docs-local@wowgs", "docs-local-files@wowgs")
+        self.assertEqual(self.setup("--mode", "model")["mode"], "model")
+        self.assertEqual(self.setup()["mode"], "model")  # the saved choice
+
+    def test_setup_does_everything_and_reports(self):
+        self.installed("docs-local@wowgs", "docs-local-files@wowgs")
+        proj = self.path("proj")
+        out = self.setup("--mode", "user", "--project", proj)
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["errors"], [])
+        self.assertEqual(out["plugins"], {"docs-local@wowgs": "9.9.9", "docs-local-files@wowgs": "9.9.9"})
+        self.assertEqual(out["projects"], [proj])
+        self.assertEqual(textio.load_json(self.path("claude/settings.json"))["enabledPlugins"],
+                         {"docs-local-files@wowgs": False})
+        self.assertEqual(textio.load_json(self.path("proj/.claude/settings.local.json"))["enabledPlugins"],
+                         {"docs-local-files@wowgs": True})
+        self.assertEqual(out["shell"]["command"], os.path.join(self.env["XDG_BIN_HOME"], "docsync"))
+        self.assertIn("start a new Claude Code session (or run /reload-plugins) in: " + proj, out["todo"])
+        check = json.loads(self.run_ok("project", "check", cwd=proj))
+        self.assertEqual((check["state"], check["setup"]), ("local", True))
+        self.assertTrue(check["sync"].startswith("The user syncs"))
+        again = self.setup()  # nothing new: no session to restart
+        self.assertTrue(again["ok"])
+        self.assertFalse(any("new Claude Code session" in t for t in again["todo"]))
+
+    def test_setup_reports_what_is_missing(self):
+        self.installed("docs-local@wowgs")
+        out = self.setup("--mode", "model", "--project", self.path("nowhere"), ok=False)
+        self.assertFalse(out["ok"])
+        self.assertIn("docs-local-files@wowgs is not installed: claude plugin install docs-local-files@wowgs",
+                      out["errors"])
+        self.assertIn("not a folder: " + self.path("nowhere"), out["errors"])
+        self.assertIsNone(out["shell"])  # mode model: no shell command
+
+    def test_shell_command_runs_the_installed_plugin(self):
+        out = self.setup("--mode", "user", ok=False)  # nothing installed yet
+        cmd = out["shell"]["command"]
+        r = subprocess.run([cmd, "project", "list"], capture_output=True, text=True, env=dict(os.environ))
         self.assertEqual(r.returncode, 1)
         self.assertIn("not installed in Claude Code", r.stderr)
-        self.write("claude/plugins/installed_plugins.json", json.dumps({"version": 2, "plugins": {
-            "docs-local@wowgs": [{"scope": "user", "installPath": self.skill}]}}))
-        r = subprocess.run([out["link"], "project", "list"], capture_output=True, text=True, env=dict(os.environ))
+        self.installed("docs-local@wowgs", "docs-local-files@wowgs")
+        r = subprocess.run([cmd, "project", "list"], capture_output=True, text=True, env=dict(os.environ))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.loads(self.run_ok("setup", "shell"))["link"], out["link"])  # its own file: rewritten
+        self.assertTrue(self.setup()["ok"])  # its own file: rewritten
 
-    def test_setup_shell_keeps_a_foreign_file_or_link(self):
+    def test_setup_keeps_a_foreign_file_or_link(self):
+        self.installed("docs-local@wowgs", "docs-local-files@wowgs")
         self.write("bin/docsync", "#!/bin/sh\necho mine\n")
-        r = self.run_cli("setup", "shell")
-        self.assertEqual(r.returncode, 1)
+        out = self.setup("--mode", "user", ok=False)
+        self.assertIn("is not docsync", out["errors"][0])
         self.assertEqual(textio.read(self.path("bin/docsync")), "#!/bin/sh\necho mine\n")
         os.remove(self.path("bin/docsync"))
         os.symlink(self.path("nowhere"), self.path("bin/docsync"))
-        self.assertEqual(self.run_cli("setup", "shell").returncode, 1)
+        self.setup(ok=False)
         self.assertFalse(os.path.exists(self.path("nowhere")))
 
-    def test_setup_claude_then_uninstall_restore_the_settings(self):
+    def test_setup_then_uninstall_restore_the_settings(self):
+        self.installed("docs-local@wowgs", "docs-local-files@wowgs")
         g = self.path("claude/settings.json")
         self.write("claude/settings.json", '{"model": "x"}')
         self.write("proj/.claude/settings.local.json", '{"permissions": {"deny": ["Bash(rm *)"]}}')
-        self.run_ok("project", "use", cwd=self.path("proj"))
-        self.run_ok("setup", "claude")
+        self.setup("--mode", "user", "--project", self.path("proj"))
         self.assertEqual(textio.load_json(g)["enabledPlugins"], {"docs-local-files@wowgs": False})
-        self.run_ok("setup", "shell")
         self.run_ok("uninstall")
         self.assertEqual(textio.load_json(g), {"model": "x"})
         self.assertEqual(textio.load_json(self.path("proj/.claude/settings.local.json")),
                          {"permissions": {"deny": ["Bash(rm *)"]}})
         self.assertFalse(os.path.lexists(os.path.join(self.env["XDG_BIN_HOME"], "docsync")))
         self.assertFalse(os.path.exists(self.path("xdg/docsync")))
-
 
 if __name__ == "__main__":
     unittest.main()

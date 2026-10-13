@@ -99,11 +99,17 @@ def decide(call_input):
                                     "(Docs tools may only write comments here)"}}
 
 
-def plugin_root():
-    """Where Claude Code installed docs-local (the path changes with every version), or None."""
+def installed(plugin_id):
+    """Claude Code's install record of a plugin ({"installPath", "version", ...}), or None."""
     base = os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR") or os.path.join(CLAUDE_DIR, "plugins")
     try:
-        recs = load_json(os.path.join(base, "installed_plugins.json"))["plugins"][PLUGIN]
+        recs = load_json(os.path.join(base, "installed_plugins.json"))["plugins"][plugin_id]
     except (OSError, ValueError, KeyError, TypeError):
         return None
-    return next((r["installPath"] for r in recs if r.get("scope") == "user"), recs[0]["installPath"] if recs else None)
+    return next((r for r in recs if r.get("scope") == "user"), recs[0] if recs else None)
+
+
+def plugin_root():
+    """Where Claude Code installed docs-local (the path changes with every version), or None."""
+    rec = installed(PLUGIN)
+    return rec["installPath"] if rec else None

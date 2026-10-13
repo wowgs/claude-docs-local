@@ -11,7 +11,7 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync doc list          docs of this project
   docsync project list      your projects
   docsync project check | use | remove   for the model: this folder's state, turn local docs on, off
-  docsync setup shell | mode | scan | claude   for the model during setup
+  docsync setup --mode user|model [--project <folder>]...   for the model during setup
   docsync uninstall         remove the docsync command and settings; docs stay
 
 Project: a root in your config, with docsync.json there: {"name": "<project>", "docs": {"<dir>": {"id": "<doc id>",
@@ -28,8 +28,8 @@ Exit codes: 0 done, 1 error, 2 conflicts.
 import argparse, json, os, platform, re, shutil, sys
 
 from . import output as out
-from .claude import (FILES, PLUGIN, edit_json, decide, hide, lock, project_settings, turn_off, turn_on, unhide,
-                     unlock, user_settings)
+from .claude import (FILES, PLUGIN, edit_json, decide, hide, installed, lock, project_settings, turn_off, turn_on,
+                     unhide, unlock, user_settings)
 from .files import slug
 from .mcp import call
 from .projects import (CONFIG, SCHEMA, entry, load_user, project_name, project_of, project_state, projects,
@@ -132,46 +132,6 @@ def project_remove(args):
     print(json.dumps({"state": "unknown", "root": None}))
 
 
-def setup_claude(args):
-    """Claude Code settings: docs-local-files off outside your projects, and each project's settings (re)written."""
-    edit_json(user_settings(), hide)
-    for r in projects():
-        if os.path.isdir(r):
-            edit_json(project_settings(r), lock)
-    print(json.dumps({"global": {FILES: False}, "projects": projects()}))
-
-
-def setup_scan(args):
-    """For the model: folders Claude Code has worked in (from ~/.claude.json, best effort) and their state."""
-    home = os.path.expanduser("~")
-    conf = os.environ.get("CLAUDE_CONFIG_DIR")
-    src = os.path.join(conf, ".claude.json") if conf else os.path.join(home, ".claude.json")
-    try:
-        paths = list(load_json(src).get("projects", {}).keys())
-        note = None
-    except Exception as e:  # internal file of Claude Code: may be missing or change format
-        paths, note = [], f"could not read {src}: {type(e).__name__}"
-    skip = {home, os.path.join(home, "Downloads"), os.path.join(home, "Desktop"), os.path.join(home, "Documents")}
-    found = []
-    for path in sorted(set(paths)):
-        if not os.path.isdir(path) or path in skip or "/Downloads/" in path + "/" and path != home:
-            continue
-        state, root = project_state(path)
-        found.append({"path": path, "label": path.replace(home, "~", 1), "state": state})
-    print(json.dumps({"projects": found, "note": note}, ensure_ascii=False, indent=1))
-
-
-def setup_mode(args):
-    """Save the sync mode (or reuse the saved one); `project check` hands its rule to the model."""
-    u = load_user()
-    mode = args.mode or u.get("sync")
-    if mode not in MODES:
-        sys.exit("no saved mode: ask the user, then run docsync setup mode user|model")
-    u["sync"] = mode
-    save_user(u)
-    print(json.dumps({"mode": mode}))
-
-
 def bin_dir():
     return os.environ.get("XDG_BIN_HOME") or os.path.join(os.path.expanduser("~"), ".local", "bin")
 
@@ -192,23 +152,64 @@ os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])
 """
 
 
-def setup_shell(args):
-    """The `docsync` command for people: a small script in ~/.local/bin (mode user)."""
+def shell_command():
+    """The `docsync` command for people: a small script in ~/.local/bin. Returns (report, error)."""
     if platform.system() == "Windows":
-        print(json.dumps({"link": None, "note": "no shell command on Windows: run python <plugin>/scripts/docsync.py"}))
-        return
+        return {"command": None, "note": "no shell command on Windows: run python <plugin>/scripts/docsync.py"}, None
     d = bin_dir()
     link = os.path.join(d, "docsync")
-    os.makedirs(d, exist_ok=True)
     if os.path.lexists(link) and (os.path.islink(link) or SHIM_MARK not in read(link)):
-        sys.exit(f"{link} exists and is not docsync; move it away, then run setup shell again")
+        return None, f"{link} exists and is not docsync; move it away, then run setup again"
+    os.makedirs(d, exist_ok=True)
     write(link, SHIM)
     os.chmod(link, 0o755)
     on_path = d in os.environ.get("PATH", "").split(os.pathsep)
     shell = os.path.basename(os.environ.get("SHELL", ""))
-    add = None if on_path else (f"fish_add_path {d}" if shell == "fish" else f'export PATH="{d}:$PATH"')
     rc = {"zsh": "~/.zshrc", "bash": "~/.bashrc", "fish": "~/.config/fish/config.fish"}.get(shell, "your shell's startup file")
-    print(json.dumps({"link": link, "on_path": on_path, "add_to_path": add, "rc_file": None if on_path else rc}))
+    line = f"fish_add_path {d}" if shell == "fish" else f'export PATH="{d}:$PATH"'
+    return {"command": link, "on_path": on_path, "add_to_path": None if on_path else f"{rc}: {line}"}, None
+
+
+def setup(args):
+    """Everything setup does after the user's two answers, then a check of the result. Prints one JSON report:
+    `ok`, what is in place, `todo` (what only the user can do) and `errors`. Safe to run again."""
+    u = load_user()
+    mode = args.mode or u.get("sync")
+    if mode not in MODES:
+        sys.exit("no saved mode: ask the user, then run docsync setup --mode user|model")
+    u["sync"] = mode
+    save_user(u)
+    errors, todo = [], []
+    plugins = {p: (installed(p) or {}).get("version") for p in (PLUGIN, FILES)}
+    for p, v in plugins.items():
+        if not v:
+            errors.append(f"{p} is not installed: claude plugin install {p}")
+    edit_json(user_settings(), hide)
+    new = []
+    for path in args.project:
+        root = os.path.realpath(path)
+        if not os.path.isdir(root):
+            errors.append(f"not a folder: {path}")
+            continue
+        if root not in projects():
+            new.append(root)
+        turn_on(root)
+    for r in projects():
+        if os.path.isdir(r):
+            edit_json(project_settings(r), lock)
+    shell = None
+    if mode == "user":
+        shell, err = shell_command()
+        if err:
+            errors.append(err)
+        elif shell.get("add_to_path"):
+            todo.append("add to " + shell["add_to_path"])
+    if new:
+        todo.append("start a new Claude Code session (or run /reload-plugins) in: " + ", ".join(new))
+    print(json.dumps({"ok": not errors, "mode": mode, "plugins": plugins, "projects": projects(), "shell": shell,
+                      "todo": todo, "errors": errors}, ensure_ascii=False, indent=1))
+    if errors:
+        sys.exit(1)
 
 
 def hook(args):
@@ -306,12 +307,9 @@ def parser():
     for c, h in (("use", "local docs on for this project"), ("remove", "local docs off for this project; files stay")):
         a = proj.add_parser(c, help=h)
         a.add_argument("path", nargs="?")
-    setup = sub.add_parser("setup", help="for the model during setup").add_subparsers(dest="sub", required=True)
-    setup.add_parser("scan", help="folders Claude Code has worked in, with their state (JSON)")
-    setup.add_parser("shell", help="the docsync command: a link in ~/.local/bin (JSON)")
-    a = setup.add_parser("mode", help="save who syncs (or reuse the saved choice)")
-    a.add_argument("mode", nargs="?", choices=sorted(MODES))
-    setup.add_parser("claude", help="Claude Code settings: the files skill off outside your projects, on in them")
+    a = sub.add_parser("setup", help="for the model during setup: settings, the shell command, projects; then a check")
+    a.add_argument("--mode", choices=sorted(MODES), help="who syncs (the saved choice when left out)")
+    a.add_argument("--project", action="append", default=[], metavar="FOLDER", help="turn local docs on here; repeatable")
     sub.add_parser("hook", help="for Claude Code: the hook on the Docs create tool")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     return p
@@ -320,7 +318,7 @@ def parser():
 COMMANDS = {
     "doc": {"add": doc_add, "list": doc_list},
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove},
-    "setup": {"scan": setup_scan, "mode": setup_mode, "shell": setup_shell, "claude": setup_claude},
+    "setup": {None: setup},
     "hook": {None: hook},
     "uninstall": {None: uninstall},
 }
