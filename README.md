@@ -5,7 +5,7 @@ A Claude Code plugin that makes Claude faster and cheaper at editing your claude
 docs-local can be run in one of 3 modes:
 
 - By hand: you run `docsync` when you want to sync.
-- Sync: docs-local syncs when Claude finishes. If a tab also changed in the doc, the sync stops and Claude tells you. Use this mode when other people edit the same docs.
+- Sync: docs-local syncs when Claude finishes. If a tab also changed in the doc, Claude merges both versions. Use this mode when other people edit the same docs.
 - Push: docs-local pushes in the background when Claude finishes. The local copy overwrites the doc. Use this mode for docs that only you edit.
 
 A sync or a push rewrites each changed tab whole. Comments on the replaced text lose their anchor.

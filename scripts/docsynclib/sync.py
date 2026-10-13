@@ -183,6 +183,7 @@ def push_tab(d, st, doc_id, t, data, tab_id, new=False):
     back, back_blocks, _ = to_markdown(after["xml"])
     ok = same(back, back_blocks, md, blocks)
     t.update(rev=after["rev"], hash=local_hash(d, base), dhash=doc_hash(after["xml"]))
+    t.pop("conflict_rev", None)
     save_state(d, st)
     kind, what = ("created", "new tab · ") if new else ("pushed", "")
     out.ev(kind if ok else "warn", f"{d}/{base}", f"{what}rev {after['rev']} · " + ("verified" if ok else "written, but the doc DIFFERS:"))
@@ -430,7 +431,10 @@ def cmd_sync(args, mode="sync"):
             if mode == "status":
                 what = ", ".join((["local edits"] if loc else []) + (["doc changed"] if rem else []))
                 out.ev("info" if what else "insync", label, what or "in sync")
+            elif loc and rem and not args.force and t.get("conflict_rev") == data["rev"] and mode in ("sync", "push"):
+                push_tab(d, st, doc_id, t, data, tab_id)  # merged with the doc's version of the conflict: the doc is unchanged since
             elif loc and rem and not args.force:
+                t["conflict_rev"] = data["rev"]  # merge with this version of the doc, and the next sync sends the result
                 out.ev("conflict", label, f"changed locally and in the doc (rev {t['rev']} → {data['rev']}) · nothing done")
             elif mode == "pull" and loc and not args.force:
                 out.ev("skip", label, "local edits not pushed (push, or pull --force to drop them)")

@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.5.0 — 2026-10-13
+
+- A conflict in mode `auto` goes to Claude to merge. The Stop hook tells Claude which tabs went to the doc and which changed in the doc too. Claude reads the doc's version with the Docs tools and merges it into the local file. The next sync sends the merge if the doc did not change again since the conflict.
+- The same works by hand: after a conflict, merge the doc's version into the file and run `docsync`.
+
 ## 2.4.0 — 2026-10-13
 
 - Claude does not run the sync. In a project, a hook denies `docsync` sync, pull, push and status, and the skill no longer mentions the sync. The user syncs, or the Stop hook does.

@@ -53,6 +53,15 @@ class Sync(Base):
         self.assertEqual(self.run_sync(), [("pulled", "1-intro")])
         self.assertEqual(self.fake.full_reads, 1)
 
+    def test_after_a_conflict_the_merged_file_is_sent(self):
+        self.run_sync()
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nhere\n")
+        self.fake.edit("t1", "# 1 Intro\n\nthere")
+        self.assertEqual(self.run_sync(), [("conflict", "1-intro")])
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nhere and there\n")
+        self.assertEqual(self.run_sync(), [("pushed", "1-intro")])
+        self.assertNotIn("conflict_rev", self.state())
+
     def test_a_change_in_the_doc_is_pulled(self):
         self.run_sync()
         self.fake.edit("t1", "# 1 Intro\n\nhello again")
@@ -291,15 +300,26 @@ class StopHook(Base):
         self.assertIsNone(self.stop())
         self.assertIn("edited", self.fake.tabs["t1"]["xml"])
 
-    def test_auto_hands_a_conflict_to_claude_once(self):
+    def test_auto_hands_a_conflict_to_claude_and_sends_the_merge(self):
         self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited here\n")
         self.fake.edit("t1", "# 1 Intro\n\nedited there")
         first = self.stop()
         self.assertEqual(first["decision"], "block")
-        self.assertIn("conflict", first["reason"])
+        self.assertIn("1-intro", first["reason"])
+        self.assertIn("read the doc's version", first["reason"])
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited here and there\n")  # Claude merges
+        self.assertIsNone(self.stop(stop_hook_active=True))
+        self.assertIn("edited here and there", self.fake.tabs["t1"]["xml"])
+
+    def test_a_doc_changed_again_during_the_merge_is_a_new_conflict(self):
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited here\n")
+        self.fake.edit("t1", "# 1 Intro\n\nedited there")
+        self.stop()
+        self.fake.edit("t1", "# 1 Intro\n\nedited there again")
+        self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nmerged with the first version\n")
         again = self.stop(stop_hook_active=True)
-        self.assertNotIn("decision", again)
-        self.assertIn("conflict", again["systemMessage"])
+        self.assertEqual(again["decision"], "block")
+        self.assertIn("again", self.fake.tabs["t1"]["xml"])  # the newer doc edit is not overwritten
 
     def test_auto_force_pushes_in_the_background_and_reports_a_failure_later(self):
         import json, subprocess

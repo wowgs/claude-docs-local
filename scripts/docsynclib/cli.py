@@ -244,7 +244,8 @@ def setup(args):
 
 
 def sync_now(root, force=False):
-    """One sync of a project, in this process, quietly. Returns (exit code, the problems as lines)."""
+    """One sync of a project, in this process, quietly. Returns (exit code, the problems as lines).
+    Its events stay in out.EVENTS for the caller."""
     os.chdir(root)
     out.JSON, out.TTY, out.CONFLICTS = True, False, 0
     out.EVENTS.clear()
@@ -285,11 +286,23 @@ def stop_hook(event):
     rc, problems = sync_now(root)
     if rc == 0:
         return None
-    text = "docs-local sync " + ("found conflicts" if rc == 2 else "failed") + ": " + "; ".join(problems)
-    if event.get("stop_hook_active"):  # Claude already had one try: tell the user, do not loop
+    sent = [e["path"] for e in out.EVENTS if e["kind"] in ("pushed", "created")]
+    conflicts = [e["path"] for e in out.EVENTS if e["kind"] == "conflict"]
+    errors = [p for p in problems if "changed locally and in the doc" not in p]
+    parts = ["docs-local sync."]
+    if sent:
+        parts.append("Sent to the doc: " + ", ".join(sent) + ".")
+    if conflicts:
+        parts.append("These tabs changed in the doc too: " + ", ".join(conflicts) + ". For each one, read the doc's "
+                     "version of the tab with the Docs tools, merge it with your edits in the local file, and keep "
+                     "both sides' changes. When you finish, the sync sends the merged file.")
+    if errors:
+        parts.append("Errors: " + "; ".join(errors) + ". Fix the local files if the cause is in them, otherwise tell "
+                     "the user.")
+    text = " ".join(parts)
+    if event.get("stop_hook_active") and not conflicts:  # an error after one try: tell the user, do not loop
         return {"systemMessage": text}
-    return {"decision": "block", "reason": text + ". Fix the local files if the cause is in them, otherwise tell "
-                                                  "the user. The sync runs again when you finish."}
+    return {"decision": "block", "reason": text}
 
 
 def push_background(args):

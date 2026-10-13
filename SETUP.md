@@ -15,7 +15,7 @@ Once, after `claude plugin install docs-local --marketplace https://wowgs.uk/plu
      "multiSelect": false,
      "options": [
        {"label": "I do", "description": "You run `docsync` yourself when you want. Claude only edits the local files."},
-       {"label": "Sync", "description": "When Claude finishes a turn, a sync sends the local edits. Safe when other people edit the same docs: if a tab changed in the doc too, Claude stops and tells you."},
+       {"label": "Sync", "description": "When Claude finishes a turn, a sync sends the local edits. Safe when other people edit the same docs: if a tab changed in the doc too, Claude merges both versions."},
        {"label": "Push", "description": "When Claude finishes a turn, the local edits are pushed in the background and overwrite the doc. For docs that only you edit."}
      ]
    }]}
