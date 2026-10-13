@@ -14,7 +14,7 @@ Works only with Docs artifacts. Diagrams and charts sync, images are not support
 
 ## Why
 
-| Mean of 3 runs | Official Docs MCP | docs-local, Sync | docs-local, Push |
+| Mean of 3 runs on a 111 KB doc with 8 tabs | Official Docs MCP | docs-local, Sync | docs-local, Push |
 |---|---|---|---|
 | Time until Claude answers | 80.8 s | 42.0 s | 26.4 s |
 | Model steps that call a tool | 22.3 | 6.0 | 5.7 |

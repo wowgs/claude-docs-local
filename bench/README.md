@@ -4,7 +4,7 @@ One Claude Code session edits a large claude.ai doc through the official Docs MC
 
 ## Results
 
-| Mean (min–max) of 3 runs | Official Docs MCP | docs-local, Sync | docs-local, Push |
+| Mean (min–max) of 3 runs on a 111 KB doc with 8 tabs | Official Docs MCP | docs-local, Sync | docs-local, Push |
 |---|---|---|---|
 | Time until Claude answers, s | 80.8 (76.2–84.5) | 42.0 (37.7–45.9) | 26.4 (23.2–28.6) |
 | Model steps that call a tool | 22.3 (22–23) | 6.0 (5–7) | 5.7 (5–6) |

@@ -53,6 +53,14 @@ cols = [(a, name) for a, name in VARIANTS if by[a]]
 n = min(len(by[a]) for a, _ in cols)
 
 
+def doc_size():
+    """The benchmark doc as the baselines hold it: its size in KB of markdown and its number of tabs."""
+    base = os.path.join(W, "base", "docs", runs[0]["run"])
+    tabs = [f for f in os.listdir(base) if f.endswith(".md")]
+    size = sum(os.path.getsize(os.path.join(base, f)) for f in tabs)
+    return f"a {round(size / 1024)} KB doc with {len(tabs)} tabs"
+
+
 def mean(a, key):
     return statistics.mean(r[key] for r in by[a])
 
@@ -88,9 +96,9 @@ def table(head, cell, with_units):
 
 
 print("\nREADME:")
-print("\n".join(table(f"Mean of {n} runs", short, False)
+print("\n".join(table(f"Mean of {n} runs on {doc_size()}", short, False)
                 + ["| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]))
 print("\nbench/README.md:")
-print("\n".join(table(f"Mean (min–max) of {n} runs", ranged, True)
+print("\n".join(table(f"Mean (min–max) of {n} runs on {doc_size()}", ranged, True)
                 + ["| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]))
 json.dump(runs, open(os.path.join(RES, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
