@@ -23,7 +23,7 @@ Requirements: Claude Code logged in with a claude.ai account, the Claude Docs co
 ## Use
 
 ```
-docsync                     sync the project you are in, or every project of yours
+docsync                     sync the project you are in; in a folder above projects, those; elsewhere, all
 docsync status              what a sync would do
 docsync doc add <link>      set up a doc in this project
 docsync project list        your projects

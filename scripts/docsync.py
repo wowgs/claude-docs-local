@@ -4,8 +4,8 @@
 For docs that one person edits. Several people editing the same doc lead to conflicts, and a push
 rewrites a whole tab, so comments on the replaced text lose their anchor.
 
-  docsync [sync]            sync the project you are in (docsync.json found upwards), or, outside any
-                            project, every project of yours that has docs
+  docsync [sync]            sync the project you are in; in a folder that holds projects, those;
+                            elsewhere, all your projects
   docsync status            what sync would do, changes nothing
   docsync pull | push       one direction only; --force overrides the safety checks
   docsync doc add <link> [dir]   set up a doc in this project (docs/<name>/ by default) and pull it
@@ -1050,15 +1050,13 @@ def save_user(u):
     json.dump(u, open(p, "w"), ensure_ascii=False, indent=1)
 
 
-def register(root, quiet=False):
-    """Mark a project as using local docs."""
-    root = os.path.abspath(root)
+def register(root):
+    """Add a project root to the user config."""
+    root = os.path.realpath(root)
     u = load_user()
     if root not in u.get("projects", []):
         u["projects"] = u.get("projects", []) + [root]
         save_user(u)
-        if not quiet:
-            ev("info", "", "added to your docsync projects")
 
 
 # Claude Code settings. Globally the skill is hidden from the model (the user turns a project on with
@@ -1124,22 +1122,18 @@ def project_settings(path):
     return os.path.join(os.path.abspath(path), ".claude", "settings.local.json")
 
 
-def turn_on(path):
-    """Claude Code settings of the project in `path` (the session's folder): skill listed, Docs writes off."""
-    f = project_settings(path)
-    edit_json(f, lock)
-    u = load_user()
-    if f not in u.get("settings", []):
-        u["settings"] = u.get("settings", []) + [f]
-        save_user(u)
+def turn_on(root):
+    """A project: in the user config, and its Claude Code settings (skill listed, Docs writes off)."""
+    register(root)
+    edit_json(project_settings(root), lock)
 
 
-def turn_off(path):
-    f = project_settings(path)
+def turn_off(root):
+    f = project_settings(root)
     if os.path.exists(f):
         edit_json(f, unlock)
     u = load_user()
-    u["settings"] = [x for x in u.get("settings", []) if x != f]
+    u["projects"] = [r for r in u.get("projects", []) if r != root]
     save_user(u)
 
 
@@ -1158,20 +1152,30 @@ def hook(args):
 
 
 def within(path, root):
-    path, root = os.path.abspath(path), os.path.abspath(root)
+    path, root = os.path.realpath(path), os.path.realpath(root)
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def project_of(path):
+    """The project (a root in the user config, the only list of projects) that holds `path`, or None."""
+    for r in sorted(projects(), key=len, reverse=True):
+        if within(path, r):
+            return r
+    return None
 
 
 def project_state(path):
     """('local' | 'unknown', project root or None) for a folder."""
-    root = find_root(path)
-    if root:
-        return "local", root
-    u = load_user()
-    for r in sorted(u.get("projects", []), key=len, reverse=True):
-        if within(path, r) or within(r, path):  # also: docs set up in a folder below this one
-            return "local", r
-    return "unknown", None
+    r = project_of(path)
+    return ("local", r) if r else ("unknown", None)
+
+
+def targets(path):
+    """Projects a sync from `path` covers: the one it is in; else the ones below it; else all."""
+    r = project_of(path)
+    if r:
+        return [r]
+    return [r for r in projects() if within(r, path)] or projects()
 
 
 def project_name(root):
@@ -1183,17 +1187,6 @@ def project_name(root):
     return n or os.path.basename(root.rstrip(os.sep)) or root
 
 
-def find_root(start):
-    d = os.path.abspath(start)
-    while True:
-        if os.path.exists(os.path.join(d, CONFIG)):
-            return d
-        up = os.path.dirname(d)
-        if up == d:
-            return None
-        d = up
-
-
 def doc_id_from(link):
     m = re.search(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/?$", link) or \
         re.search(r"([A-Za-z0-9]{22})/?$", link)
@@ -1203,9 +1196,8 @@ def doc_id_from(link):
 
 
 def doc_add(args):
-    turn_on(os.getcwd())
-    state, root = project_state(os.getcwd())
-    root = root or os.getcwd()
+    root = project_of(os.getcwd()) or os.path.realpath(os.getcwd())
+    turn_on(root)
     os.chdir(root)
     CTX["project"] = project_name(root)
     doc_id = doc_id_from(args.link)
@@ -1227,17 +1219,16 @@ def doc_add(args):
     cfg["docs"][d] = {"id": doc_id, "name": name}
     open(CONFIG, "w").write(json.dumps(cfg, ensure_ascii=False, indent=1) + "\n")
     ev("created", d, f"doc «{name}» set up")
-    register(root)
     args.dirs, args.force = [d], False
     cmd_sync(args, "pull")
     say(summary(STATS, "doc"))
 
 
 def doc_list(args):
-    root = find_root(os.getcwd())
+    root = project_of(os.getcwd())
     if not root:
-        sys.exit("no docsync.json here or above")
-    cfg = json.load(open(os.path.join(root, CONFIG)))
+        sys.exit("not in a project: turn it on with /docs-local in Claude Code, or docsync project use")
+    cfg = json.load(open(os.path.join(root, CONFIG))) if os.path.exists(os.path.join(root, CONFIG)) else {}
     for d, v in cfg.get("docs", {}).items():
         doc_id, name = entry(v)
         ev("info", d, f"{name or ''} {doc_id or '(new, not created yet)'}".strip())
@@ -1259,21 +1250,18 @@ def project_check(args):
 
 
 def project_use(args):
-    path = os.path.abspath(args.path or os.getcwd())
-    turn_on(path)
-    state, root = project_state(path)
-    register(root or path, quiet=True)
-    print(json.dumps({"state": "local", "root": root or path}))
+    path = args.path or os.getcwd()
+    root = project_of(path) or os.path.realpath(path)
+    turn_on(root)
+    print(json.dumps({"state": "local", "root": root}))
 
 
 def project_remove(args):
-    """Local docs off for this project: Claude Code settings back, project unregistered; files stay."""
-    path = os.path.abspath(args.path or os.getcwd())
-    turn_off(path)
-    state, root = project_state(path)
-    u = load_user()
-    u["projects"] = [r for r in u.get("projects", []) if r not in (root, path)]
-    save_user(u)
+    """Local docs off for this project: Claude Code settings back, project out of the config; files stay."""
+    root = project_of(args.path or os.getcwd())
+    if not root:
+        sys.exit("not in a project")
+    turn_off(root)
     print(json.dumps({"state": "unknown", "root": None}))
 
 
@@ -1282,10 +1270,10 @@ def setup_claude(args):
     settings (re)written, so the hook points at this copy of the script."""
     edit_json(os.path.join(CLAUDE_DIR, "settings.json"),
               lambda s: s.setdefault("skillOverrides", {}).__setitem__(SKILL, "user-invocable-only"))
-    for f in load_user().get("settings", []):
-        if os.path.isdir(os.path.dirname(os.path.dirname(f))):
-            edit_json(f, lock)
-    print(json.dumps({"global": "user-invocable-only", "projects": load_user().get("settings", [])}))
+    for r in projects():
+        if os.path.isdir(r):
+            edit_json(project_settings(r), lock)
+    print(json.dumps({"global": "user-invocable-only", "projects": projects()}))
 
 
 def setup_scan(args):
@@ -1462,7 +1450,7 @@ def uninstall(args):
     if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(__file__):
         os.remove(link)
         removed.append(link)
-    for f in load_user().get("settings", []):
+    for f in [project_settings(r) for r in projects()]:
         if os.path.exists(f):
             edit_json(f, unlock)
             removed.append(f"docs-local settings in {f}")
@@ -1491,10 +1479,9 @@ RESULT = []
 
 def run_sync(args):
     global BUF
-    here = find_root(os.getcwd())
-    roots = [here] if here else [r for r in projects() if os.path.exists(os.path.join(r, CONFIG))]
+    roots = [r for r in targets(os.getcwd()) if os.path.exists(os.path.join(r, CONFIG))]
     if not roots:
-        sys.exit("no docsync.json here or above, and no projects with docs: run `docsync doc add <link>` in a project")
+        sys.exit("no projects with docs: turn one on with /docs-local in Claude Code")
     total = {}
     for n, root in enumerate(roots):
         os.chdir(root)
@@ -1507,7 +1494,6 @@ def run_sync(args):
         BUF = []
         redraw()
         try:
-            register(root)
             cmd_sync(args, args.cmd)
             doc_end()
         finally:
