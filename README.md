@@ -42,7 +42,7 @@ It removes the `docsync` command, your docsync settings and what it added to Cla
 
 ## Development
 
-Two plugins from this repository: `docs-local` at the root (the `/docs-local` command in `skills/`, the hook in `hooks/`, `bin/docsync`, setup) is on everywhere; `docs-local-files` in `files/` (the skill that says this project's docs are local) is on only in projects that use local docs. A release is a `claude plugin tag` per plugin and the new tags in the marketplace file.
+Two plugins from this repository: `docs-local` at the root (the `/docs-local` command in `skills/`, the hook in `hooks/`, `bin/docsync`, setup) is on everywhere; `docs-local-files` in `files/` (the skill that says this project's docs are local) is on only in projects that use local docs. The marketplace (https://wowgs.uk/plugins/marketplace.json) takes both from `master`; a release is a new `version` in the plugin's `.claude-plugin/plugin.json`, which is what tells installed copies to update.
 
 `scripts/docsync.py` is the command; the code is in `scripts/docsynclib/`: `cli` (commands), `sync` (one project's docs), `markdown` (doc XML ↔ markdown), `files` (a doc's local folder), `projects` (your config), `claude` (Claude Code settings and the hook), `mcp` (the Claude Docs connector), `output`. Standard library only, Python 3.9+.
 
