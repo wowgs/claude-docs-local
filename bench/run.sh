@@ -3,7 +3,7 @@
 # F (docs-local, mode auto-force); docs already local for S and F. Each run: the session, then (F) the wait for its
 # background push, then a fresh pull of the doc and check.py. Usage: run.sh <work dir made by prepare.sh>
 W=$1
-B=${0:A:h}; R=${B:h}; D="python3 $R/scripts/docsync.py"
+B=${0:A:h}; R=${B:h}; D=(python3 $R/scripts/docsync.py)  # an array: VAR=value $D passes VAR on, VAR=value eval does not
 mkdir -p $W/results
 now() { python3 -c 'import time; print(f"{time.time():.3f}")' }
 id_of() { awk -v r=$1 '$1==r {print $2}' $W/copies.txt }
@@ -38,8 +38,8 @@ for i in 1 2 3; do
     echo "{\"run\":\"$run\",\"rc\":$rc,\"t0\":$t0,\"t1\":$t1,\"t2\":$t2,\"push\":\"$push\",\"cwd\":\"$dir\"}" > $W/results/$run.times.json
     echo "$(date +%T) end $run rc=$rc" >> $W/results/log.txt
     rm -rf $W/final/$run; mkdir -p $W/final/$run
-    (cd $W/final/$run && XDG_CONFIG_HOME=$W/xdg-tools eval $D project use >/dev/null && \
-       XDG_CONFIG_HOME=$W/xdg-tools eval $D doc add $link docs/after >/dev/null 2>> $W/results/$run.pull.err)
+    (cd $W/final/$run && XDG_CONFIG_HOME=$W/xdg-tools $D project use >/dev/null && \
+       XDG_CONFIG_HOME=$W/xdg-tools $D doc add $link docs/after >/dev/null 2>> $W/results/$run.pull.err)
     python3 -I $B/check.py $W/base/docs/$run $W/final/$run/docs/after > $W/results/$run.check.json 2>> $W/results/$run.check.err
   done
 done

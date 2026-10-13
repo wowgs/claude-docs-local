@@ -17,7 +17,7 @@ Works only with Docs artifacts. Diagrams and charts sync, images are not support
 Paste into Claude Code:
 
 ```
-Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json`, then follow the plugin's `skills/docs-local/SETUP.md`.
+Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json && claude plugin install docs-local-files@wowgs`, then follow the plugin's `skills/docs-local/SETUP.md`.
 ```
 
 `/docs-local` turns a project on, `/docs-local remove` turns it off.

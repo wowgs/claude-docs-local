@@ -19,6 +19,8 @@ class Paths(unittest.TestCase):
 
     def test_the_install_line_names_a_setup_file_that_exists(self):
         line = next(l for l in text("README.md").splitlines() if "claude plugin install" in l)
+        self.assertIn("claude plugin install docs-local --marketplace", line)
+        self.assertIn("claude plugin install docs-local-files@wowgs", line)  # both plugins, by the command
         found = re.findall(r"`([^`]*SETUP\.md)`", line)
         self.assertEqual(len(found), 1, line)
         self.assertTrue(os.path.isfile(os.path.join(REPO, found[0])), found[0])
@@ -34,3 +36,14 @@ class Paths(unittest.TestCase):
 
     def test_the_files_plugin_names_no_root_path_it_does_not_ship(self):
         self.assertEqual(ROOT_VAR.findall(text("files", "SKILL.md")), [])
+
+
+class Setup(unittest.TestCase):
+    def test_setup_configures_and_does_not_install(self):
+        steps_text = text("skills", "docs-local", "SETUP.md").split("## Install", 1)[1].split("## Updates", 1)[0]
+        body = steps_text.split("\n1. ", 1)[1]  # the numbered steps, without the line that names the install command
+        self.assertNotIn("claude plugin install", body)
+        steps = re.findall(r"^(\d+)\. \*\*", "1. " + body, re.M)
+        self.assertEqual(steps, [str(i) for i in range(1, len(steps) + 1)])  # numbered without gaps
+        for ref in re.findall(r"step (\d+)", body):
+            self.assertIn(ref, steps)

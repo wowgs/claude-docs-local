@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.5.2 — 2026-10-13
+
+- The install command installs both plugins. SETUP.md only configures: sync mode, projects, then the setup command, which still reports a missing plugin.
+- `bench/run.sh` and `bench/prepare.sh` pass the isolated config to every call. Before, the pulls after each run registered their folders in the user's real config.
+
 ## 2.5.1 — 2026-10-13
 
 - SETUP.md moved to `skills/docs-local/SETUP.md`, next to the `/docs-local` skill: only Claude reads it.
