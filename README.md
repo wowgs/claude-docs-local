@@ -17,6 +17,7 @@ Works only with Docs artifacts. Diagrams and charts sync, images are not support
 | Sync at the end of the turn | — | 14.2 s | — |
 | Push in the background, after the answer | — | — | 12.7 s |
 | Cost | $0.81 | $0.32 | $0.32 |
+| Correct results | 3 of 3 | 3 of 3 | 3 of 3 |
 
 [Benchmark](bench/README.md)
 

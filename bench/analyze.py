@@ -88,7 +88,8 @@ def table(head, cell, with_units):
 
 
 print("\nREADME:")
-print("\n".join(table(f"Mean of {n} runs", short, False)))
+print("\n".join(table(f"Mean of {n} runs", short, False)
+                + ["| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]))
 print("\nbench/README.md:")
 print("\n".join(table(f"Mean (min–max) of {n} runs", ranged, True)
                 + ["| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]))
