@@ -4,6 +4,8 @@ Claude Code edits your claude.ai Docs as local markdown files. `docsync` syncs t
 
 Use it only for docs that you edit alone: a sync rewrites whole tabs, so other people's edits end in conflicts.
 
+Works only with Docs artifacts. Embedded diagrams and charts sync; images do not: an existing one stays, a new one cannot be added.
+
 ## Install
 
 Paste into Claude Code:
