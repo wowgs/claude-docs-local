@@ -11,7 +11,7 @@ Editing local files is faster and cheaper than editing a doc through tool calls,
 Paste this into Claude Code:
 
 ```
-Install the docs-local skill globally: clone https://github.com/wowgs/docs-local into ~/.claude/skills/docs-local, then read its SETUP.md and follow it.
+Install the skill from https://github.com/wowgs/docs-local, then follow its SETUP.md.
 ```
 
 Setup asks one or two questions: who syncs (you with `docsync`, or Claude), and which of your projects keep their docs as local files. A doc is set up the first time Claude works on it in such a project.
