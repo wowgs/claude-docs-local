@@ -6,7 +6,6 @@ One Claude Code session edits a large claude.ai doc through the official Docs MC
 
 | Mean (min–max) of 3 runs on a 111 KB doc with 8 tabs | Official Docs MCP | docs-local, Sync | docs-local, Push |
 |---|---|---|---|
-| Correct results | 3 of 3 | 3 of 3 | 3 of 3 |
 | **Time until Claude answers, s** | **80.8 (76.2–84.5)** | **42.0 (37.7–45.9)** | **26.4 (23.2–28.6)** |
 | **Cost, $** | **0.81 (0.77–0.84)** | **0.32 (0.30–0.35)** | **0.32 (0.31–0.33)** |
 | Model steps that call a tool | 22.3 (22–23) | 6.0 (5–7) | 5.7 (5–6) |
@@ -14,6 +13,7 @@ One Claude Code session edits a large claude.ai doc through the official Docs MC
 | — time running the tools, s | 6.4 (6.2–6.8) | 0.6 (0.5–0.7) | 0.5 (0.4–0.5) |
 | Sync at the end of the turn, s | — | 14.2 (13.7–15.3) | — |
 | Push in the background, after the answer, s | — | — | 12.7 (12.3–12.9) |
+| Correct results | 3 of 3 | 3 of 3 | 3 of 3 |
 
 A model step is one request to Claude. Claude reads the context, thinks and writes the next tool call. Each step took about 3 seconds, however small the call was.
 

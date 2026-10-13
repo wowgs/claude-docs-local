@@ -90,11 +90,11 @@ def ranged(a, unit, key, d):
 
 def table(head, cell, with_units):
     b = lambda x, key: f"**{x}**" if key in BOLD else x
-    out = [f"| {head} | " + " | ".join(name for _, name in cols) + " |", "|---|" + "---|" * len(cols),
-           "| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]
+    out = [f"| {head} | " + " | ".join(name for _, name in cols) + " |", "|---|" + "---|" * len(cols)]
     for label, unit, key, d, has in ROWS:
         name = f"{label}, {unit}" if with_units and unit else label
         out.append(f"| {b(name, key)} | " + " | ".join(b(cell(a, unit, key, d), key) if has(a) else "—" for a, _ in cols) + " |")
+    out.append("| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |")
     return out
 
 
