@@ -69,6 +69,7 @@ class FakeDocs:
         self.tabs = {}  # tab id -> {"name", "order", "node", "xml", "rev"}
         self.widgets = {}  # widget id -> {"code", "pub", "parent"}
         self.calls = []
+        self.full_reads = 0
 
     def add_tab(self, tab_id, name, md, order=None):
         self.tabs[tab_id] = {"name": name, "order": order or f"a{len(self.tabs)}", "node": "n-" + tab_id,
@@ -81,6 +82,7 @@ class FakeDocs:
         return next(t for t in self.tabs.values() if t["node"] == node)
 
     def read_node(self, doc_id, node):
+        self.full_reads += 1
         t = self.by_node(node)
         return {"xml": t["xml"], "rev": t["rev"]}
 
@@ -93,6 +95,11 @@ class FakeDocs:
                 "tabs": {k: {"order": t["order"]} for k, t in self.tabs.items()},
                 "files": [{"id": k, "name": t["name"], "content": {"id": t["node"], "engine": "prose"}}
                           for k, t in self.tabs.items()]}}
+        if tool == "read" and ref.get("object") == "node" and (args.get("payload") or {}).get("kind") == "view":
+            t = next((t for t in self.tabs.values() if t["node"] == ref["id"]), None)
+            if t is None:  # like the server: a deleted tab is refused
+                return {"verdict": "refused", "code": "not_found"}
+            return {"verdict": "allow", "rev": t["rev"], "data": {"rev": t["rev"], "xml": "<doc/>", "complete": True}}
         if tool == "update" and ref.get("object") == "node" and args.get("engine") == "widget":
             w, pl = self.widgets[ref["id"]], args["payload"]
             if pl["kind"] == "draft":  # like the server: valid code goes live at once, a stale basePub is refused

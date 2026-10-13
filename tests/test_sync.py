@@ -39,6 +39,16 @@ class Sync(Sandbox):
         self.assertEqual(self.run_sync(), [])
         self.assertEqual(self.run_sync("status"), [("insync", "1-intro")])
 
+    def test_unchanged_tabs_are_not_read_whole(self):
+        self.fake.add_tab("t2", "2 More", "# 2 More\n\nthere")
+        self.run_sync()
+        self.fake.full_reads = 0
+        self.assertEqual(self.run_sync(), [])
+        self.assertEqual(self.fake.full_reads, 0)
+        self.fake.edit("t1", "# 1 Intro\n\nhello again")  # one tab changed in the doc: only it is read whole
+        self.assertEqual(self.run_sync(), [("pulled", "1-intro")])
+        self.assertEqual(self.fake.full_reads, 1)
+
     def test_a_change_in_the_doc_is_pulled(self):
         self.run_sync()
         self.fake.edit("t1", "# 1 Intro\n\nhello again")

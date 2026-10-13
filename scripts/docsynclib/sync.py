@@ -1,5 +1,6 @@
 """Sync one project's docs: per tab, by freshness since the last sync."""
 import difflib, json, os, sys
+from concurrent.futures import ThreadPoolExecutor
 
 from . import output as out
 from .files import (TRASH, adopt_renamed, base_for, load_state, local_changed, local_hash, local_tab,
@@ -36,6 +37,55 @@ def remote_tabs(doc_id):
     files = sorted((f for f in o.get("files", v.get("files", [])) if f["id"] in order),
                    key=lambda f: order[f["id"]])
     return v.get("name"), [(f["id"], f["name"], f["content"]["id"]) for f in files if f["content"].get("engine") == "prose"]
+
+
+WORKERS = 8  # requests to the doc at once
+
+
+def parallel(fn, items):
+    """fn over items, several requests at once; results in the order of items."""
+    items = list(items)
+    if len(items) < 2:
+        return [fn(x) for x in items]
+    with ThreadPoolExecutor(min(WORKERS, len(items))) as ex:
+        return list(ex.map(fn, items))
+
+
+def read_rev(doc_id, node, rev):
+    """A tab's current rev without its text: the changes since the rev we hold, which are none when nothing
+    changed. None when the doc gives no complete answer; then the caller reads the whole tab."""
+    o = call("read", {"ref": {"object": "node", "id": node}, "container": C(doc_id), "engine": "prose",
+                      "payload": {"kind": "view", "sinceRev": rev}}, soft=True)
+    data = o.get("data") or {}
+    return data.get("rev") if o.get("verdict") == "allow" and data.get("complete") else None
+
+
+def prefetch(d, st, doc_id):
+    """What the per-tab loop needs from the doc, read at once instead of tab after tab: the doc's tab list, each
+    known tab's rev, each diagram, and the whole text of the tabs that changed here or in the doc.
+    Returns (remote_tabs result, {node: full data}, {node: rev}, {widget id: value or None})."""
+    known = [t for t in st["tabs"].values() if os.path.exists(os.path.join(d, t["base"] + ".md"))]
+    wids = [w for t in known for w, info in t.get("widgets", {}).items() if os.path.exists(os.path.join(d, info["file"]))]
+
+    def job(j):
+        kind, x = j
+        if kind == "doc":
+            return remote_tabs(doc_id)
+        if kind == "rev":
+            return read_rev(doc_id, x["node"], x["rev"])
+        o = call("read", {"ref": {"object": "node", "id": x}, "container": C(doc_id)}, soft=True)
+        return o.get("value") if o.get("verdict") == "allow" else None
+
+    res = parallel(job, [("doc", None)] + [("rev", t) for t in known] + [("widget", w) for w in wids])
+    revs = {t["node"]: r for t, r in zip(known, res[1:1 + len(known)])}
+    widgets = dict(zip(wids, res[1 + len(known):]))
+    if res[0] is None:  # the doc is gone: the loop is not reached
+        return None, {}, revs, widgets
+    in_doc = {node for _, _, node in res[0][1]}  # a tab deleted in the doc is not read: the loop handles it
+    need = [t["node"] for t in known if t["node"] in in_doc
+            and (revs[t["node"]] != t["rev"] or local_hash(d, t["base"]) != t["hash"])]
+    full = dict(zip(need, parallel(lambda n: read_node(doc_id, n), need)))
+    return res[0], full, revs, widgets
 
 
 def pull_tab(d, st, doc_id, tab_id, name, node, data=None):
@@ -156,7 +206,7 @@ def push_widget(d, doc_id, info, wid, pub):
     info.update(pub=read_widget(doc_id, wid).get("pub"), hash=sha(code))
 
 
-def sync_widgets(d, st, doc_id, t, mode, force):
+def sync_widgets(d, st, doc_id, t, mode, force, fetched=None):
     """The tab's diagrams, each by freshness like a tab: its code here vs its publish in the doc.
     Returns True when one is in conflict (then the tab's text is left alone too)."""
     conflict = False
@@ -164,7 +214,7 @@ def sync_widgets(d, st, doc_id, t, mode, force):
         path = os.path.join(d, info["file"])
         if not os.path.exists(path):
             continue
-        v = read_widget(doc_id, wid)
+        v = (fetched or {}).get(wid) or read_widget(doc_id, wid)
         loc = sha(read_text(path)) != info["hash"]
         rem = v.get("pub") != info["pub"] and sha(v.get("code", "")) != info["hash"]
         if v.get("pub") != info["pub"] and not rem:
@@ -296,7 +346,7 @@ def cmd_sync(args, mode="sync"):
         os.makedirs(d, exist_ok=True)
         st = load_state(d)
         st["doc"] = doc_id
-        got = remote_tabs(doc_id)
+        got, full, revs, fetched = prefetch(d, st, doc_id)
         remote = got[1] if got else None
         if remote is None:
             if mode == "status":
@@ -342,9 +392,14 @@ def cmd_sync(args, mode="sync"):
                     pull_tab(d, st, doc_id, tab_id, name, node)
                 continue
             out.status("checking", t['base'])
-            if sync_widgets(d, st, doc_id, t, mode, args.force):
+            if sync_widgets(d, st, doc_id, t, mode, args.force, fetched):
                 continue
-            data = read_node(doc_id, node)
+            data = full.get(node)
+            if data is None:
+                if node == t["node"] and revs.get(node) == t["rev"] and local_hash(d, t["base"]) == t["hash"]:
+                    data = {"rev": t["rev"]}  # unchanged here and in the doc: its text is not needed
+                else:
+                    data = read_node(doc_id, node)
             loc, rem = local_hash(d, t["base"]) != t["hash"], data["rev"] != t["rev"]
             out.STATS["checked"] = out.STATS.get("checked", 0) + 1
             out.DOC["checked"] += 1
@@ -362,9 +417,9 @@ def cmd_sync(args, mode="sync"):
             elif (mode in ("sync", "push") and loc) and not (mode == "sync" and rem and args.force):
                 push_tab(d, st, doc_id, t, data, tab_id)
             elif mode in ("sync", "pull") and (rem or (mode == "pull" and args.force)):
-                pull_tab(d, st, doc_id, tab_id, name, node, data)
+                pull_tab(d, st, doc_id, tab_id, name, node, data if "xml" in data else None)
             elif name != t["name"] and mode in ("sync", "pull"):
-                pull_tab(d, st, doc_id, tab_id, name, node, data)
+                pull_tab(d, st, doc_id, tab_id, name, node, data if "xml" in data else None)
         for tab_id in [k for k in st["tabs"] if k not in seen]:
             t = st["tabs"][tab_id]
             label = f"{d}/{t['base']}"
