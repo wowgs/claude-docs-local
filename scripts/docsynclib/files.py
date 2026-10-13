@@ -108,8 +108,9 @@ def local_tab(d, base):
     """A tab not yet in the doc: its markdown, chips and name (from its `# heading`)."""
     md = read_text(os.path.join(d, base + ".md")) or ""
     blocks = json.loads(read_text(os.path.join(d, base + ".blocks.json")) or "{}")
-    if any(v.get("type") == "embed" for v in blocks.values()):
-        sys.exit(f"{d}/{base}.md: a new tab cannot carry an embedded widget; add the diagram in the doc")
+    if any(v.get("type") == "embed" and not v.get("ref", "").startswith("node/new-") for v in blocks.values()):
+        sys.exit(f"{d}/{base}.md: a new tab cannot show a diagram of another tab; make its own "
+                 f"({base}.widget-new-<name>.jsx + a chip with ref node/new-<name>)")
     m = re.search(r"^# (.+)$", md, re.M)
     return md, blocks, (m.group(1).strip() if m else base.replace("-", " "))
 

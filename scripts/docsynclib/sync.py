@@ -3,8 +3,9 @@ import difflib, json, os, sys
 
 from . import output as out
 from .files import (TRASH, adopt_renamed, base_for, load_state, local_changed, local_hash, local_tab,
-                    move_tab_files, read_text, save_state, slug, tab_files, to_trash, widgets_changed)
-from .markdown import (chunks, doc_hash, full_ids, h1, md_source, norm, render, same, sha, to_markdown, top_ids)
+                    move_tab_files, read_text, save_state, slug, tab_files, to_trash)
+from .markdown import (check_pushable, chunks, doc_hash, full_ids, h1, md_source, norm, render, same, sha,
+                       to_markdown, top_ids)
 from .mcp import C, call, find_key, read_node
 from .projects import entry, load_cfg, save_cfg, set_cfg_id
 from .textio import write
@@ -73,24 +74,50 @@ def maybe_rename(d, st, doc_id, tab_id, t, data):
     save_state(d, st)
 
 
-def push_tab(d, st, doc_id, t, data, tab_id=None):
-    if tab_id:
+NEW_WIDGET = "node/new-"  # an embed chip for a diagram made locally: <tab>.widget-new-<slug>.jsx, not yet in the doc
+
+
+def create_widgets(d, st, doc_id, tab_id, t):
+    """Make the tab's new diagrams in the doc, then point their chips and files at the ids they got."""
+    base = t["base"]
+    bpath = os.path.join(d, base + ".blocks.json")
+    blocks = json.loads(read_text(bpath) or "{}")
+    made = False
+    for spec in blocks.values():
+        if spec.get("type") != "embed" or not spec.get("ref", "").startswith(NEW_WIDGET):
+            continue
+        name = spec["ref"][len(NEW_WIDGET):]
+        src = os.path.join(d, f"{base}.widget-new-{name}.jsx")
+        code = read_text(src)
+        if code is None:
+            sys.exit(f"{src}: missing; a chip with ref {spec['ref']} needs this file with the diagram's code")
+        out.status(f"creating diagram {name}", base)
+        res = call("create", {"object": "node", "engine": "widget", "container": C(doc_id),
+                              "payload": {"parent": {"object": "file", "id": tab_id}, "code": code}})
+        wid = res.get("minted")
+        if res.get("outcome") != "published" or not wid:
+            sys.exit(f"{src}: the doc did not publish this diagram: {json.dumps(res.get('report') or res, ensure_ascii=False)[:1500]}")
+        v = call("read", {"ref": {"object": "node", "id": wid}, "container": C(doc_id)})["value"]
+        dst = f"{base}.widget-{wid}.jsx"
+        os.replace(src, os.path.join(d, dst))
+        spec["ref"] = "node/" + wid
+        t.setdefault("widgets", {})[wid] = {"file": dst, "pub": v.get("pub"), "hash": sha(code)}
+        made = True
+        out.ev("created", f"{d}/{base}", f"diagram {name} → {wid}")
+    if made:
+        write(bpath, json.dumps(blocks, ensure_ascii=False, indent=1) + "\n")
+        save_state(d, st)
+
+
+def push_tab(d, st, doc_id, t, data, tab_id, new=False):
+    if not new:
         maybe_rename(d, st, doc_id, tab_id, t, data)
     base = t["base"]
-    for wid in widgets_changed(d, t):
-        info = t["widgets"][wid]
-        code = read_text(os.path.join(d, info["file"]))
-        call("update", {"ref": {"object": "node", "id": wid}, "engine": "widget", "container": C(doc_id),
-                        "payload": {"kind": "draft", "basePub": info["pub"], "code": code}})
-        call("update", {"ref": {"object": "node", "id": wid}, "engine": "widget", "container": C(doc_id),
-                        "payload": {"kind": "publish"}})
-        v = call("read", {"ref": {"object": "node", "id": wid}, "container": C(doc_id)})["value"]
-        info.update(pub=v.get("pub"), hash=sha(code))
-        save_state(d, st)
-        out.ev("info", f"{d}/{base}", f"diagram {wid} published")
+    md = read_text(os.path.join(d, base + ".md"))
+    check_pushable(md, f"{d}/{base}.md")
+    create_widgets(d, st, doc_id, tab_id, t)
     if local_hash(d, base) == t["hash"]:
         return
-    md = read_text(os.path.join(d, base + ".md"))
     blocks = json.loads(read_text(os.path.join(d, base + ".blocks.json")) or "{}")
     parts = chunks(md)
     out.status(f"pushing part 1/{len(parts)}", base)
@@ -104,10 +131,62 @@ def push_tab(d, st, doc_id, t, data, tab_id=None):
     ok = same(back, back_blocks, md, blocks)
     t.update(rev=after["rev"], hash=local_hash(d, base), dhash=doc_hash(after["xml"]))
     save_state(d, st)
-    out.ev("pushed" if ok else "warn", f"{d}/{base}", f"rev {after['rev']} · " + ("verified" if ok else "pushed, but the doc DIFFERS:"))
+    kind, what = ("created", "new tab · ") if new else ("pushed", "")
+    out.ev(kind if ok else "warn", f"{d}/{base}", f"{what}rev {after['rev']} · " + ("verified" if ok else "written, but the doc DIFFERS:"))
     if not ok:
         out.say("\n".join(difflib.unified_diff(norm(render(md, blocks)), norm(render(back, back_blocks)),
                                                  "local", "doc", lineterm="", n=0)))
+
+
+def read_widget(doc_id, wid):
+    return call("read", {"ref": {"object": "node", "id": wid}, "container": C(doc_id)})["value"]
+
+
+def push_widget(d, doc_id, info, wid, pub):
+    """Local code -> the doc. A valid draft goes live at once; one the server keeps staged is published."""
+    code = read_text(os.path.join(d, info["file"]))
+    res = call("update", {"ref": {"object": "node", "id": wid}, "engine": "widget", "container": C(doc_id),
+                          "payload": {"kind": "draft", "basePub": pub, "code": code}})
+    if res.get("outcome") != "published":
+        if (res.get("report") or {}).get("status") != "staged":
+            sys.exit(f"{d}/{info['file']}: the doc did not take this code: "
+                     f"{json.dumps(res.get('report') or res, ensure_ascii=False)[:1500]}")
+        call("update", {"ref": {"object": "node", "id": wid}, "engine": "widget", "container": C(doc_id),
+                        "payload": {"kind": "publish"}})
+    info.update(pub=read_widget(doc_id, wid).get("pub"), hash=sha(code))
+
+
+def sync_widgets(d, st, doc_id, t, mode, force):
+    """The tab's diagrams, each by freshness like a tab: its code here vs its publish in the doc.
+    Returns True when one is in conflict (then the tab's text is left alone too)."""
+    conflict = False
+    for wid, info in t.get("widgets", {}).items():
+        path = os.path.join(d, info["file"])
+        if not os.path.exists(path):
+            continue
+        v = read_widget(doc_id, wid)
+        loc = sha(read_text(path)) != info["hash"]
+        rem = v.get("pub") != info["pub"] and sha(v.get("code", "")) != info["hash"]
+        if v.get("pub") != info["pub"] and not rem:
+            info["pub"] = v.get("pub")  # published again with the same code
+        label = f"{d}/{info['file']}"
+        if mode == "status":
+            what = ", ".join((["local edits"] if loc else []) + (["doc changed"] if rem else []))
+            if what:
+                out.ev("info", label, "diagram: " + what)
+        elif loc and rem and not force:
+            out.ev("conflict", label, "diagram changed locally and in the doc · nothing done")
+            conflict = True
+        elif loc and mode in ("sync", "push") and not (rem and mode == "sync"):
+            push_widget(d, doc_id, info, wid, v.get("pub"))
+            out.ev("pushed", label, f"diagram · publish {info['pub']}")
+        elif rem and mode in ("sync", "pull"):
+            write(path, v["code"])
+            info.update(pub=v.get("pub"), hash=sha(v["code"]))
+            out.ev("pulled", label, f"diagram · publish {info['pub']}")
+    if mode != "status":
+        save_state(d, st)
+    return conflict
 
 
 def append_parts(doc_id, node, parts, blocks):
@@ -132,20 +211,18 @@ def merge_last_table(doc_id, node):
                         {"op": "delete", "target": {"kind": "blocks", "ids": [src[1]]}, "ifRev": data["rev"]}]}})
 
 
-def record_new_tab(d, st, doc_id, tab_id, name, node, base, md, blocks):
-    after = read_node(doc_id, node)
-    back, back_blocks, _ = to_markdown(after["xml"])
-    ok = same(back, back_blocks, md, blocks)
-    st["tabs"][tab_id] = {"name": name, "node": node, "base": base, "rev": after["rev"],
-                          "hash": local_hash(d, base), "widgets": {}, "h1": h1(md), "dhash": doc_hash(after["xml"])}
-    save_state(d, st)
-    out.ev("created" if ok else "warn", f"{d}/{base}", f"new tab · rev {after['rev']} · " + ("verified" if ok else "created, but the doc DIFFERS"))
+def start_tab(d, st, doc_id, tab_id, node, base, name):
+    """A tab just made with only its heading: record it, then push the local text into it."""
+    data = read_node(doc_id, node)
+    t = {"name": name, "node": node, "base": base, "rev": data["rev"], "hash": "", "widgets": {}, "h1": name}
+    st["tabs"][tab_id] = t
+    push_tab(d, st, doc_id, t, data, tab_id, new=True)
 
 
 def create_tab(d, st, doc_id, base):
     out.status("creating the tab", base)
     md, blocks, name = local_tab(d, base)
-    parts = chunks(md)
+    check_pushable(md, f"{d}/{base}.md")
     v = call("read", {"ref": {"object": "project", "id": doc_id}})["value"]
     orders = [t.get("order") for t in v["tabs"].values() if t.get("order")]
     order = max(orders) + "m" if orders else "a1"
@@ -153,15 +230,14 @@ def create_tab(d, st, doc_id, base):
     res = call("batch", {"container": C(doc_id), "batch": [
         {"$lid": "f", "verb": "create", "object": "file", "payload": {"value": {"birthName": birth}}},
         {"$lid": "n", "verb": "create", "object": "node", "engine": "prose",
-         "payload": {"parent": {"object": "file", "id": "$lid:f"}, "source": md_source(parts[0][0], blocks)}},
+         "payload": {"parent": {"object": "file", "id": "$lid:f"}, "source": md_source(f"# {name}\n", {})}},
         {"verb": "update", "ref": {"object": "file", "id": "$lid:f"},
          "payload": {"kind": "value", "value": {"birthName": birth, "content": {"kind": "node", "id": "$lid:n"}}}},
         {"verb": "update", "ref": {"object": "project", "id": doc_id},
          "payload": {"kind": "patch", "patch": [{"op": "set", "path": ["tabs", "$lid:f"],
                                                  "value": {"name": name, "order": order}}]}}]})
     lids = find_key(res, "lids")
-    append_parts(doc_id, lids["n"], parts[1:], blocks)
-    record_new_tab(d, st, doc_id, lids["f"], name, lids["n"], base, md, blocks)
+    start_tab(d, st, doc_id, lids["f"], lids["n"], base, name)
 
 
 def delete_tab(d, st, doc_id, tab_id):
@@ -185,23 +261,19 @@ def create_doc(config, d, want_name=None):
     if not bases:
         sys.exit(f"{d}: no .md files to make a doc from")
     md, blocks, name = local_tab(d, bases[0])
-    parts = chunks(md)
-    doc = {"markdown": parts[0][0]}
-    used = md_source(parts[0][0], blocks).get("blocks")
-    if used:
-        doc["blocks"] = used
-    res = call("batch", {"container": {"kind": "project", "create": {"name": want_name or name, "doc": doc}}, "batch": []})
+    check_pushable(md, f"{d}/{bases[0]}.md")
+    res = call("batch", {"container": {"kind": "project", "create": {"name": want_name or name,
+                                                                     "doc": {"markdown": f"# {name}\n"}}}, "batch": []})
     lids = find_key(res, "lids")
     doc_id = (res.get("created") or {}).get("minted")
     if not doc_id:
         sys.exit(f"doc created but its id was not found in the reply: {json.dumps(res, ensure_ascii=False)[:800]}")
     set_cfg_id(config, d, doc_id)
-    st = {"tabs": {}, "doc": doc_id}
     call("update", {"ref": {"object": "project", "id": doc_id}, "payload": {"kind": "patch", "patch": [
-        {"op": "set", "path": ["tabs", lids["f"], "order"], "value": "a0"}]}})
-    append_parts(doc_id, lids["n"], parts[1:], blocks)
-    record_new_tab(d, st, doc_id, lids["f"], name, lids["n"], bases[0], md, blocks)
+        {"op": "set", "path": ["tabs", lids["f"], "order"], "value": "a0"}, {"op": "set", "path": ["tabs", lids["f"], "name"], "value": name}]}})
+    st = {"tabs": {}, "doc": doc_id}
     out.ev("created", d, f"new doc {doc_id} · id written to {config}")
+    start_tab(d, st, doc_id, lids["f"], lids["n"], bases[0], name)
     for base in bases[1:]:
         create_tab(d, st, doc_id, base)
 
@@ -270,8 +342,10 @@ def cmd_sync(args, mode="sync"):
                     pull_tab(d, st, doc_id, tab_id, name, node)
                 continue
             out.status("checking", t['base'])
+            if sync_widgets(d, st, doc_id, t, mode, args.force):
+                continue
             data = read_node(doc_id, node)
-            loc, rem = local_changed(d, t), data["rev"] != t["rev"]
+            loc, rem = local_hash(d, t["base"]) != t["hash"], data["rev"] != t["rev"]
             out.STATS["checked"] = out.STATS.get("checked", 0) + 1
             out.DOC["checked"] += 1
             if rem and t.get("dhash") and doc_hash(data["xml"]) == t["dhash"]:

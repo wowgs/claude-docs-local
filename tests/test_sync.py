@@ -114,6 +114,116 @@ class Sync(Sandbox):
         self.assertEqual(self.run_sync(), [("conflict", "1-intro")])
         self.assertIn("t1", self.fake.tabs)
 
+    def test_a_new_diagram_is_made_from_its_local_file(self):
+        self.run_sync()
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhello\n\n<?claude block d1?>\n")
+        textio.write("docs/d/1-intro.blocks.json", '{"d1": {"type": "embed", "ref": "node/new-flow"}}')
+        textio.write("docs/d/1-intro.widget-new-flow.jsx", "export default () => <svg/>;")
+        self.assertEqual(self.run_sync(), [("created", "1-intro"), ("pushed", "1-intro")])
+        self.assertEqual(self.fake.widgets["w1"]["code"], "export default () => <svg/>;")
+        self.assertEqual(self.fake.widgets["w1"]["parent"], "t1")
+        self.assertIn("<embed id='.3' ref='node/w1'/>", self.fake.tabs["t1"]["xml"])
+        self.assertEqual(textio.load_json("docs/d/1-intro.blocks.json")["d1"]["ref"], "node/w1")
+        self.assertTrue(os.path.exists("docs/d/1-intro.widget-w1.jsx"))
+        self.assertFalse(os.path.exists("docs/d/1-intro.widget-new-flow.jsx"))
+        self.assertEqual(self.state()["widgets"]["w1"]["file"], "1-intro.widget-w1.jsx")
+        self.assertEqual(self.run_sync(), [])
+
+    def test_an_edited_diagram_goes_live_once(self):
+        self.fake.widgets["w7"] = {"code": "old", "pub": 1, "parent": "t1"}
+        self.fake.edit("t1", "# 1 Intro\n\nEMBED node/w7")
+        self.run_sync()
+        self.assertEqual(textio.read("docs/d/1-intro.widget-w7.jsx"), "old")
+        textio.write("docs/d/1-intro.widget-w7.jsx", "new")
+        self.assertEqual(self.run_sync(), [("pushed", "1-intro.widget-w7.jsx")])
+        self.assertEqual(self.fake.widgets["w7"], {"code": "new", "pub": 2, "parent": "t1"})
+        self.assertEqual(self.state()["widgets"]["w7"]["pub"], 2)
+        self.assertEqual(self.run_sync(), [])
+
+    def diagram_tab(self):
+        self.fake.widgets["w7"] = {"code": "old", "pub": 1, "parent": "t1"}
+        self.fake.edit("t1", "# 1 Intro\n\nEMBED node/w7")
+        self.run_sync()
+
+    def test_a_diagram_edited_in_the_doc_is_pulled(self):
+        self.diagram_tab()
+        self.fake.widgets["w7"].update(code="theirs", pub=2)
+        self.assertEqual(self.run_sync(), [("pulled", "1-intro.widget-w7.jsx")])
+        self.assertEqual(textio.read("docs/d/1-intro.widget-w7.jsx"), "theirs")
+        self.assertEqual(self.run_sync(), [])
+
+    def test_a_diagram_edited_on_both_sides_is_a_conflict_and_its_tab_waits(self):
+        self.diagram_tab()
+        self.fake.widgets["w7"].update(code="theirs", pub=2)
+        textio.write("docs/d/1-intro.widget-w7.jsx", "mine")
+        self.fake.edit("t1", "# 1 Intro\n\nnew text\n\nEMBED node/w7")
+        self.assertEqual(self.run_sync(), [("conflict", "1-intro.widget-w7.jsx")])
+        self.assertEqual(textio.read("docs/d/1-intro.widget-w7.jsx"), "mine")
+        self.assertNotIn("new text", self.local())
+        self.assertEqual(self.fake.widgets["w7"]["code"], "theirs")
+
+    def test_a_new_publish_of_the_same_code_is_no_change(self):
+        self.diagram_tab()
+        self.fake.widgets["w7"]["pub"] = 5
+        self.assertEqual(self.run_sync(), [])
+        self.assertEqual(self.state()["widgets"]["w7"]["pub"], 5)
+        textio.write("docs/d/1-intro.widget-w7.jsx", "mine")
+        self.assertEqual(self.run_sync(), [("pushed", "1-intro.widget-w7.jsx")])
+        self.assertEqual(self.fake.widgets["w7"]["pub"], 6)
+
+    def test_an_edited_diagram_the_doc_refuses_stops_the_sync(self):
+        self.fake.widgets["w7"] = {"code": "old", "pub": 1, "parent": "t1"}
+        self.fake.edit("t1", "# 1 Intro\n\nEMBED node/w7")
+        self.run_sync()
+        textio.write("docs/d/1-intro.widget-w7.jsx", "BROKEN")
+        with self.assertRaises(SystemExit):
+            self.run_sync()
+        self.assertEqual(self.fake.widgets["w7"]["code"], "old")
+
+    def test_a_diagram_the_doc_refuses_stops_the_push(self):
+        self.run_sync()
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\n<?claude block d1?>\n")
+        textio.write("docs/d/1-intro.blocks.json", '{"d1": {"type": "embed", "ref": "node/new-x"}}')
+        textio.write("docs/d/1-intro.widget-new-x.jsx", "BROKEN")
+        with self.assertRaises(SystemExit):
+            self.run_sync()
+        self.assertEqual(self.fake.tabs["t1"]["xml"], xml_of("# 1 Intro\n\nhello"))
+
+    def test_a_new_tab_with_its_own_new_diagram(self):
+        self.run_sync()
+        textio.write("docs/d/2-more.md", "# 2 More\n\ntext\n\n<?claude block d1?>\n")
+        textio.write("docs/d/2-more.blocks.json", '{"d1": {"type": "embed", "ref": "node/new-pic"}}')
+        textio.write("docs/d/2-more.widget-new-pic.jsx", "export default () => <svg/>;")
+        self.assertEqual(self.run_sync(), [("created", "2-more"), ("created", "2-more")])
+        t2 = next(k for k, t in self.fake.tabs.items() if t["name"] == "2 More")
+        self.assertEqual(self.fake.widgets["w1"]["parent"], t2)
+        self.assertIn("ref='node/w1'", self.fake.tabs[t2]["xml"])
+        self.assertEqual(self.run_sync(), [])
+
+    def test_a_new_tab_cannot_show_a_diagram_of_another_tab(self):
+        self.run_sync()
+        textio.write("docs/d/2-more.md", "# 2 More\n\n<?claude block d1?>\n")
+        textio.write("docs/d/2-more.blocks.json", '{"d1": {"type": "embed", "ref": "node/w9"}}')
+        with self.assertRaises(SystemExit):
+            self.run_sync()
+
+    def test_a_cell_with_several_paragraphs_is_not_pushed(self):
+        self.run_sync()
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\n| A |\n| --- |\n| a<br>b |\n")
+        with self.assertRaises(SystemExit):
+            self.run_sync()
+        self.assertEqual(self.fake.tabs["t1"]["xml"], xml_of("# 1 Intro\n\nhello"))
+
+    def test_a_new_doc_from_local_files(self):
+        os.makedirs("docs/n")
+        textio.write("docs/n/1-first.md", "# 1 First\n\nbody\n")
+        textio.write("docsync.json", '{"docs": {"docs/n": {"id": null, "name": "New"}}}')
+        self.fake.tabs.clear()
+        self.assertEqual(self.run_sync(), [("created", "docs/n"), ("created", "1-first")])
+        self.assertEqual(textio.load_json("docsync.json")["docs"]["docs/n"]["id"], "D-new")
+        self.assertEqual(self.fake.tabs["t-new"]["xml"], xml_of("# 1 First\n\nbody"))
+        self.assertEqual(self.fake.tabs["t-new"]["order"], "a0")
+
     def test_status_changes_nothing(self):
         self.run_sync()
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\nmine\n")

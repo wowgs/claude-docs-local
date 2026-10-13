@@ -51,6 +51,10 @@ def xml_of(md):
     """The doc XML for plain markdown (headings and paragraphs only), as the fake server stores it."""
     out = []
     for n, b in enumerate([b for b in md.strip().split("\n\n") if b.strip()], 1):
+        e = re.match(r"^EMBED (\S+)$", b)
+        if e:
+            out.append(f"<embed id='.{n}' ref='{e.group(1)}'/>")
+            continue
         m = re.match(r"^(#+) (.*)$", b)
         head, text = (f" heading='{len(m.group(1))}'", m.group(2)) if m else ("", b)
         out.append(f"<paragraph id='{'p' if n == 1 else ''}.{n}'{head}><text>{html.escape(text)}</text></paragraph>")
@@ -63,6 +67,7 @@ class FakeDocs:
     def __init__(self, name="Doc"):
         self.name = name
         self.tabs = {}  # tab id -> {"name", "order", "node", "xml", "rev"}
+        self.widgets = {}  # widget id -> {"code", "pub", "parent"}
         self.calls = []
 
     def add_tab(self, tab_id, name, md, order=None):
@@ -88,20 +93,51 @@ class FakeDocs:
                 "tabs": {k: {"order": t["order"]} for k, t in self.tabs.items()},
                 "files": [{"id": k, "name": t["name"], "content": {"id": t["node"], "engine": "prose"}}
                           for k, t in self.tabs.items()]}}
+        if tool == "update" and ref.get("object") == "node" and args.get("engine") == "widget":
+            w, pl = self.widgets[ref["id"]], args["payload"]
+            if pl["kind"] == "draft":  # like the server: valid code goes live at once, a stale basePub is refused
+                if pl["basePub"] != w["pub"]:
+                    raise SystemExit("update refused: widget-draft-stale")
+                if "BROKEN" in pl["code"]:
+                    return {"verdict": "allow", "outcome": "staged-with-errors", "report": {"status": "staged-with-errors"}}
+                w.update(code=pl["code"], pub=w["pub"] + 1)
+                return {"verdict": "allow", "outcome": "published"}
+            raise AssertionError("nothing is staged to publish")
         if tool == "update" and ref.get("object") == "node":
             op = args["payload"]["ops"][0]
             if op["op"] == "replace":
                 t = self.by_node(ref["id"])
-                t.update(xml=xml_of(op["with"]["from"]["content"]), rev=t["rev"] + 1)
+                src = op["with"]
+                md = re.sub(r"<\?claude block (\w+)\?>", lambda m: "EMBED " + src["blocks"][m.group(1)]["ref"],
+                            src["from"]["content"])
+                t.update(xml=xml_of(md), rev=t["rev"] + 1)
             return {"verdict": "allow"}
         if tool == "update" and ref.get("object") == "project":
             for p in args["payload"]["patch"]:
-                if p["path"][0] == "tabs" and p["path"][2] == "name":
-                    self.tabs[p["path"][1]]["name"] = p["value"]
+                if p["path"][0] == "tabs" and p["path"][2] in ("name", "order"):
+                    self.tabs[p["path"][1]][p["path"][2]] = p["value"]
                 elif p["path"] == ["name"]:
                     self.name = p["value"]
             return {"verdict": "allow"}
         if tool == "delete":
             self.tabs.pop(ref["id"])
             return {"verdict": "allow"}
+        if tool == "read" and ref.get("object") == "node" and ref["id"] in self.widgets:
+            return {"verdict": "allow", "value": self.widgets[ref["id"]]}
+        if tool == "create" and args.get("engine") == "widget":
+            if "BROKEN" in args["payload"]["code"]:
+                return {"verdict": "allow", "outcome": "staged-with-errors", "report": {"diagnostics": ["x"]}}
+            wid = f"w{len(self.widgets) + 1}"
+            self.widgets[wid] = {"code": args["payload"]["code"], "pub": 1, "parent": args["payload"]["parent"]["id"]}
+            return {"verdict": "allow", "outcome": "published", "minted": wid}
+        if tool == "batch" and "create" in args["container"]:  # a new doc with one tab
+            self.name = args["container"]["create"]["name"]
+            self.add_tab("t-new", self.name, args["container"]["create"]["doc"]["markdown"])
+            return {"verdict": "allow", "created": {"minted": "D-new"}, "lids": {"f": "t-new", "n": "n-t-new"}}
+        if tool == "batch":  # a new tab: file, prose node, pointer, name + order
+            tab_id = f"t{len(self.tabs) + 1}"
+            md = args["batch"][1]["payload"]["source"]["from"]["content"]
+            patch = args["batch"][3]["payload"]["patch"][0]["value"]
+            self.add_tab(tab_id, patch["name"], md, patch["order"])
+            return {"verdict": "allow", "lids": {"f": tab_id, "n": "n-" + tab_id}}
         raise AssertionError(f"unexpected call {tool} {args}")

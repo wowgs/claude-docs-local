@@ -63,6 +63,67 @@ class ToMarkdown(unittest.TestCase):
             m.to_markdown("<doc><quote id='a.1'/></doc>")
 
 
+MORE = (
+    "<doc>"
+    "<blockquote id='a.1'><paragraph><text>Quote with a list:</text></paragraph>"
+    "<list kind='bullet'><listItem><paragraph><text>one</text></paragraph></listItem></list></blockquote>"
+    "<codeBlock id='.2' language='python'><text><![CDATA[if a < b and c > d:\n    print(\"```\")]]></text></codeBlock>"
+    "<horizontalRule id='.3'/>"
+    "<paragraph id='.4'><text>line one</text><hardBreak/><text>line two</text></paragraph>"
+    "<list id='.5' kind='ordered' start='3'><listItem><paragraph><text>three</text></paragraph></listItem>"
+    "<listItem><paragraph><text>four</text></paragraph></listItem></list>"
+    "<table id='.6'><row><cell header='true'><paragraph><text>S</text></paragraph></cell></row>"
+    "<row><cell><paragraph><dropdown enum='e1' index='1'>Done</dropdown></paragraph></cell></row>"
+    "<row><cell><paragraph><dropdown enum='e1'/></paragraph></cell></row>"
+    "<row><cell><paragraph><text>a</text><hardBreak/><text>b</text></paragraph></cell></row></table>"
+    "<paragraph id='.7'><media blob='blob/x1' alt='A [red] square'/></paragraph>"
+    "</doc>"
+)
+
+MORE_MD = """> Quote with a list:
+>
+> - one
+
+````python
+if a < b and c > d:
+    print("```")
+````
+
+---
+
+line one\\
+line two
+
+3. three
+4. four
+
+| S |
+| --- |
+| <?claude block c1?> |
+| <?claude block c2?> |
+| a<br>b |
+
+![A \\[red\\] square](blob/x1)
+"""
+
+
+class MoreElements(unittest.TestCase):
+    def test_quotes_code_rules_breaks_numbering_dropdowns_images(self):
+        md, blocks, _ = m.to_markdown(MORE)
+        self.assertEqual(md, MORE_MD)
+        self.assertEqual(blocks, {"c1": {"type": "dropdown", "enum": "e1", "index": 1},
+                                  "c2": {"type": "dropdown", "enum": "e1"}})
+
+    def test_a_cell_with_several_paragraphs_cannot_be_pushed(self):
+        with self.assertRaises(SystemExit) as e:
+            m.check_pushable(MORE_MD, "t.md")
+        self.assertIn("line 22", str(e.exception))
+
+    def test_literal_br_text_in_a_cell_can_be_pushed(self):
+        m.check_pushable("| A |\n| --- |\n| a\\<br\\>b |\n", "t.md")
+        m.check_pushable("text <br> outside a table\n", "t.md")
+
+
 class Compare(unittest.TestCase):
     def test_mention_labels_are_ignored(self):
         md = "see <?claude block c1?>\n"
@@ -75,8 +136,9 @@ class Compare(unittest.TestCase):
         self.assertFalse(m.same(md, {"c1": {"type": "mention", "ref": "file/t1"}},
                                 md, {"c1": {"type": "mention", "ref": "file/t2"}}))
 
-    def test_trailing_spaces_and_outer_blank_lines_are_ignored(self):
-        self.assertTrue(m.same("\na  \nb\n\n", {}, "a\nb", {}))
+    def test_trailing_spaces_and_extra_blank_lines_are_ignored(self):
+        self.assertTrue(m.same("\na  \n\n\n\nb\n\n", {}, "a\n\nb", {}))
+        self.assertFalse(m.same("a\nb", {}, "a\n\nb", {}))
 
     def test_doc_hash_ignores_formatting_attributes(self):
         self.assertEqual(m.doc_hash(DOC), m.doc_hash(DOC.replace(" width='3'", " width='9'")))
