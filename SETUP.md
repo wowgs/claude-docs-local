@@ -21,8 +21,9 @@ After installing this skill and after every update.
    }]}
    ```
    "I do" → `docsync.py setup mode user`; "Claude does" → `docsync.py setup mode model`. Don't edit SKILL.md by hand.
-4. **Mode `user` only:** run `docsync.py setup shell`. If it returns `on_path` false, tell the user the one line to add (`add_to_path`) to their shell startup file (`rc_file`); don't edit it yourself.
-5. **Projects — only if the config has neither `"projects"` nor `"declined"`.** Run `python3 <skill folder>/scripts/docsync.py setup scan`. If it returns no `unknown` projects (or a `note`), skip. Otherwise ask one multiSelect question with AskUserQuestion; options are the `unknown` projects, `label` and `path` from the scan. For example:
+4. **Claude Code settings:** run `docsync.py setup claude`.
+5. **Mode `user` only:** run `docsync.py setup shell`. If it returns `on_path` false, tell the user the one line to add (`add_to_path`) to their shell startup file (`rc_file`); don't edit it yourself.
+6. **Projects — only if step 1 found no config.** Run `python3 <skill folder>/scripts/docsync.py setup scan`. If it returns no `unknown` projects (or a `note`), skip. Otherwise ask one multiSelect question with AskUserQuestion; options are the `unknown` projects, `label` and `path` from the scan. For example:
    ```json
    {"questions": [{
      "question": "Which of these projects should keep their Claude Docs as local files?",
@@ -34,26 +35,8 @@ After installing this skill and after every update.
      ]
    }]}
    ```
-   2–4 options per question; more projects → more questions in the same call (up to 4), and beyond that ask for the rest in the reply. A single project → the same question with options "Yes" and "No". Chosen → `docsync.py project use <path>`; not chosen → `docsync.py project decline <path>`.
-6. **Report in one line:** the version (`<skill folder>/VERSION`), the mode, what changed, which projects use local docs.
-
-## New project
-
-`project check` returned `unknown`. Ask exactly this with AskUserQuestion:
-
-```json
-{"questions": [{
-  "question": "Work with this project's Claude Docs as local files?",
-  "header": "Local docs",
-  "multiSelect": false,
-  "options": [
-    {"label": "Yes", "description": "Claude keeps this project's docs as local files and edits them there."},
-    {"label": "No", "description": "Claude works with the docs as usual and won't ask again in this project."}
-  ]
-}]}
-```
-
-"Yes" → `python3 <skill folder>/scripts/docsync.py doc add <link>`; "No" → `docsync.py project decline`, then use the Docs tools.
+   2–4 options per question; more projects → more questions in the same call (up to 4), and beyond that ask for the rest in the reply. A single project → the same question with options "Yes" and "No". Chosen → `docsync.py project use <path>`.
+7. **Report in one line:** the version (`<skill folder>/VERSION`), the mode, what changed, which projects use local docs.
 
 ## Update
 

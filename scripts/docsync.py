@@ -10,16 +10,17 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync pull | push       one direction only; --force overrides the safety checks
   docsync doc add <link> [dir]   set up a doc in this project (docs/<name>/ by default) and pull it
   docsync doc list          docs of this project
-  docsync project list      your projects: using local docs, and declined
-  docsync project check | use | decline   for the model: this folder's state, opt in, opt out
+  docsync project list      your projects
+  docsync project check | use | remove   for the model: this folder's state, turn local docs on, off
   docsync update check | apply [--yes]   newer versions of this skill (git); then setup runs again
-  docsync setup shell | mode | scan     for the model during setup
+  docsync setup shell | mode | scan | claude   for the model during setup
   docsync uninstall         remove the docsync command and settings; docs stay
 
 Project: docsync.json at its root, {"name": "<project>", "docs": {"<dir>": {"id": "<doc id>", "name": "<doc name>"}}},
 one folder per doc: <tab>.md, <tab>.blocks.json, <tab>.widget-<id>.jsx, .docsync-state.json.
 Your settings and projects: ~/.config/docsync/config.json ($XDG_CONFIG_HOME, %APPDATA% on Windows).
-Declined projects are listed in that file and never asked about again.
+Claude Code settings: the skill is hidden from the model outside your projects (~/.claude/settings.json);
+in each project .claude/settings.local.json lists it and turns off the Docs tools that write, except comments.
 Login: Claude Code's claude.ai login, read on each run and never stored.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
 Output: for people in mode "user", one JSON document in mode "model" (--json / --human override).
@@ -1050,29 +1051,110 @@ def save_user(u):
 
 
 def register(root, quiet=False):
-    """Mark a project as using local docs (and no longer declined)."""
+    """Mark a project as using local docs."""
     root = os.path.abspath(root)
     u = load_user()
-    changed = False
-    if root in u.get("declined", []):
-        u["declined"].remove(root)
-        changed = True
     if root not in u.get("projects", []):
         u["projects"] = u.get("projects", []) + [root]
-        changed = True
+        save_user(u)
         if not quiet:
             ev("info", "", "added to your docsync projects")
-    if changed:
+
+
+# Claude Code settings. Globally the skill is hidden from the model (the user turns a project on with
+# /docs-local); in a project that is on, the skill is listed and the Docs tools that write are off,
+# except comments: `create` stays, and a hook lets it make only comments (object "utterance").
+CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+SKILL = "docs-local"
+DOCS_TOOL = "mcp__claude_ai_Claude_Docs__"
+DENY = [DOCS_TOOL + t for t in ("batch", "update", "delete")]
+
+
+def hook_command():
+    py = "python" if platform.system() == "Windows" else "python3"
+    return f'{py} "{os.path.realpath(__file__)}" hook'
+
+
+def ours(group):
+    return any("docsync.py" in h.get("command", "") and h.get("command", "").endswith(" hook")
+               for h in group.get("hooks", []))
+
+
+def edit_json(path, change):
+    s = json.load(open(path)) if os.path.exists(path) else {}
+    change(s)
+    if s:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write(json.dumps(s, ensure_ascii=False, indent=2) + "\n")
+    elif os.path.exists(path):
+        os.remove(path)
+
+
+def prune(s, *keys):
+    """Drop empty containers along a key path, innermost first."""
+    for n in range(len(keys), 0, -1):
+        o = s
+        for k in keys[:n - 1]:
+            o = o.get(k, {})
+        if keys[n - 1] in o and not o[keys[n - 1]]:
+            del o[keys[n - 1]]
+
+
+def lock(s):
+    s.setdefault("skillOverrides", {})[SKILL] = "on"
+    deny = s.setdefault("permissions", {}).setdefault("deny", [])
+    deny += [t for t in DENY if t not in deny]
+    pre = s.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    pre[:] = [g for g in pre if not ours(g)]
+    pre.append({"matcher": DOCS_TOOL + "create", "hooks": [{"type": "command", "command": hook_command()}]})
+
+
+def unlock(s):
+    s.get("skillOverrides", {}).pop(SKILL, None)
+    prune(s, "skillOverrides")
+    if "deny" in s.get("permissions", {}):
+        s["permissions"]["deny"] = [t for t in s["permissions"]["deny"] if t not in DENY]
+    prune(s, "permissions", "deny")
+    if "PreToolUse" in s.get("hooks", {}):
+        s["hooks"]["PreToolUse"] = [g for g in s["hooks"]["PreToolUse"] if not ours(g)]
+    prune(s, "hooks", "PreToolUse")
+
+
+def project_settings(path):
+    return os.path.join(os.path.abspath(path), ".claude", "settings.local.json")
+
+
+def turn_on(path):
+    """Claude Code settings of the project in `path` (the session's folder): skill listed, Docs writes off."""
+    f = project_settings(path)
+    edit_json(f, lock)
+    u = load_user()
+    if f not in u.get("settings", []):
+        u["settings"] = u.get("settings", []) + [f]
         save_user(u)
 
 
-def decline(root):
-    root = os.path.abspath(root)
+def turn_off(path):
+    f = project_settings(path)
+    if os.path.exists(f):
+        edit_json(f, unlock)
     u = load_user()
-    u["projects"] = [r for r in u.get("projects", []) if r != root]
-    if root not in u.get("declined", []):
-        u["declined"] = u.get("declined", []) + [root]
+    u["settings"] = [x for x in u.get("settings", []) if x != f]
     save_user(u)
+
+
+def hook(args):
+    """PreToolUse hook on the Docs `create` tool: only comments; tabs and contents are local files."""
+    try:
+        call_input = json.load(sys.stdin)
+    except ValueError:
+        return
+    if call_input.get("tool_input", {}).get("object") == "utterance":
+        return
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse", "permissionDecision": "deny",
+        "permissionDecisionReason": "docs-local: this project's docs are local files; edit those instead "
+                                    "(Docs tools may only write comments here)"}}))
 
 
 def within(path, root):
@@ -1081,7 +1163,7 @@ def within(path, root):
 
 
 def project_state(path):
-    """('local' | 'declined' | 'unknown', project root or None) for a folder."""
+    """('local' | 'unknown', project root or None) for a folder."""
     root = find_root(path)
     if root:
         return "local", root
@@ -1089,14 +1171,7 @@ def project_state(path):
     for r in sorted(u.get("projects", []), key=len, reverse=True):
         if within(path, r) or within(r, path):  # also: docs set up in a folder below this one
             return "local", r
-    for r in sorted(u.get("declined", []), key=len, reverse=True):
-        if within(path, r):
-            return "declined", r
     return "unknown", None
-
-
-def declined(root):
-    return project_state(root)[0] == "declined"
 
 
 def project_name(root):
@@ -1128,6 +1203,7 @@ def doc_id_from(link):
 
 
 def doc_add(args):
+    turn_on(os.getcwd())
     state, root = project_state(os.getcwd())
     root = root or os.getcwd()
     os.chdir(root)
@@ -1172,9 +1248,7 @@ def project_list(args):
     for r in u.get("projects", []):
         ok = os.path.exists(r)
         ev("info" if ok else "warn", r.replace(os.path.expanduser("~"), "~", 1), "local docs" if ok else "missing")
-    for r in u.get("declined", []):
-        ev("insync", r.replace(os.path.expanduser("~"), "~", 1), "declined")
-    if not u.get("projects") and not u.get("declined"):
+    if not u.get("projects"):
         say("no projects yet")
 
 
@@ -1185,13 +1259,33 @@ def project_check(args):
 
 
 def project_use(args):
-    register(args.path or os.getcwd(), quiet=True)
-    print(json.dumps({"state": "local", "root": os.path.abspath(args.path or os.getcwd())}))
+    path = os.path.abspath(args.path or os.getcwd())
+    turn_on(path)
+    state, root = project_state(path)
+    register(root or path, quiet=True)
+    print(json.dumps({"state": "local", "root": root or path}))
 
 
-def project_decline(args):
-    decline(args.path or os.getcwd())
-    print(json.dumps({"state": "declined", "root": os.path.abspath(args.path or os.getcwd())}))
+def project_remove(args):
+    """Local docs off for this project: Claude Code settings back, project unregistered; files stay."""
+    path = os.path.abspath(args.path or os.getcwd())
+    turn_off(path)
+    state, root = project_state(path)
+    u = load_user()
+    u["projects"] = [r for r in u.get("projects", []) if r not in (root, path)]
+    save_user(u)
+    print(json.dumps({"state": "unknown", "root": None}))
+
+
+def setup_claude(args):
+    """Claude Code settings: the skill hidden from the model outside your projects, and each project's
+    settings (re)written, so the hook points at this copy of the script."""
+    edit_json(os.path.join(CLAUDE_DIR, "settings.json"),
+              lambda s: s.setdefault("skillOverrides", {}).__setitem__(SKILL, "user-invocable-only"))
+    for f in load_user().get("settings", []):
+        if os.path.isdir(os.path.dirname(os.path.dirname(f))):
+            edit_json(f, lock)
+    print(json.dumps({"global": "user-invocable-only", "projects": load_user().get("settings", [])}))
 
 
 def setup_scan(args):
@@ -1368,6 +1462,14 @@ def uninstall(args):
     if os.path.islink(link) and os.path.realpath(link) == os.path.realpath(__file__):
         os.remove(link)
         removed.append(link)
+    for f in load_user().get("settings", []):
+        if os.path.exists(f):
+            edit_json(f, unlock)
+            removed.append(f"docs-local settings in {f}")
+    g = os.path.join(CLAUDE_DIR, "settings.json")
+    if os.path.exists(g) and SKILL in json.load(open(g)).get("skillOverrides", {}):
+        edit_json(g, lambda s: (s["skillOverrides"].pop(SKILL, None), prune(s, "skillOverrides")))
+        removed.append(f"docs-local in {g}")
     p = user_config()
     if os.path.isdir(os.path.dirname(p)):
         shutil.rmtree(os.path.dirname(p))
@@ -1391,7 +1493,6 @@ def run_sync(args):
     global BUF
     here = find_root(os.getcwd())
     roots = [here] if here else [r for r in projects() if os.path.exists(os.path.join(r, CONFIG))]
-    roots = [r for r in roots if not declined(r)]
     if not roots:
         sys.exit("no docsync.json here or above, and no projects with docs: run `docsync doc add <link>` in a project")
     total = {}
@@ -1447,9 +1548,9 @@ def main():
     a.add_argument("dir", nargs="?")
     doc.add_parser("list", help="docs of this project")
     proj = sub.add_parser("project", help="your projects").add_subparsers(dest="sub", required=True)
-    proj.add_parser("list", help="projects using local docs, and declined ones")
+    proj.add_parser("list", help="projects using local docs")
     proj.add_parser("check", help="state of this folder (JSON)")
-    for c, h in (("use", "this project uses local docs"), ("decline", "this project does not; don't ask again")):
+    for c, h in (("use", "local docs on for this project"), ("remove", "local docs off for this project; files stay")):
         a = proj.add_parser(c, help=h)
         a.add_argument("path", nargs="?")
     upd = sub.add_parser("update", help="newer versions of this skill").add_subparsers(dest="sub", required=True)
@@ -1461,6 +1562,8 @@ def main():
     setup.add_parser("shell", help="the docsync command: a link in ~/.local/bin (JSON)")
     a = setup.add_parser("mode", help="save who syncs (or reuse the saved choice) and write it into SKILL.md")
     a.add_argument("mode", nargs="?", choices=sorted(MODES))
+    setup.add_parser("claude", help="Claude Code settings: skill hidden outside your projects, Docs writes off in them")
+    sub.add_parser("hook", help="for Claude Code: the hook on the Docs create tool")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     args = p.parse_args()
     args.cmd = args.cmd or "sync"
@@ -1478,9 +1581,10 @@ def main():
                  "won't know their docs are local")
     try:
         {"doc": {"add": doc_add, "list": doc_list},
-         "project": {"list": project_list, "check": project_check, "use": project_use, "decline": project_decline},
+         "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove},
          "update": {"check": update_check, "apply": update_apply},
-         "setup": {"scan": setup_scan, "mode": setup_mode, "shell": setup_shell},
+         "setup": {"scan": setup_scan, "mode": setup_mode, "shell": setup_shell, "claude": setup_claude},
+         "hook": {None: hook},
          "uninstall": {None: uninstall}}.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
     finally:
         if _live:
