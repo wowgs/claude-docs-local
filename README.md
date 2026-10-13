@@ -14,7 +14,7 @@ Paste this into Claude Code:
 Install the skill globally from https://github.com/wowgs/docs-local, then follow its SETUP.md.
 ```
 
-Setup asks one or two questions: who syncs (you with `docsync`, or Claude), and which of your projects keep their docs as local files. Later, turn on another project by typing `/docs-local` in it.
+Setup asks one or two questions: who syncs (you with `docsync`, or Claude), and which of your projects keep their docs as local files. Later, turn on another project by typing `/docs-local` in it, and turn one off with `/docs-local remove`.
 
 In a project that is on, Claude cannot write to its docs through the Docs tools, only comments: it edits the local files. In other projects Claude does not see the skill.
 

@@ -1,11 +1,14 @@
 ---
 name: docs-local
 description: Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs artifact, or sets docs up for local work.
+argument-hint: "[remove]"
 ---
 
 # Docs as local files
 
 Edit a doc's local files, never the doc through Docs tools.
+
+Invoked with the argument `remove`: run `python3 <skill folder>/scripts/docsync.py project remove` in the working folder, tell the user local docs are off for this project (the files stay), and stop.
 
 ## Workflow
 
