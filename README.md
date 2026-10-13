@@ -39,3 +39,13 @@ docsync uninstall
 ```
 
 It removes the `docsync` command, your docsync settings and what it added to Claude Code's settings, then tells you the skill folder to delete. Your docs and their local files stay.
+
+## Development
+
+`scripts/docsync.py` is the command; the code is in `scripts/docsynclib/`: `cli` (commands), `sync` (one project's docs), `markdown` (doc XML ↔ markdown), `files` (a doc's local folder), `projects` (your config), `claude` (Claude Code settings and the hook), `mcp` (the Claude Docs connector), `update`, `output`. Standard library only, Python 3.9+.
+
+Tests, offline (a fake Docs server stands in for claude.ai):
+
+```
+python3 -m unittest discover -s tests
+```

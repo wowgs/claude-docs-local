@@ -1,0 +1,269 @@
+"""The doc's XML as markdown plus chips, and the markdown cut into parts that fit one write."""
+import hashlib, html, json, re, sys
+
+TOKEN = re.compile(r"<(/?)(\w+)([^>]*?)(/?)>|([^<]+)")
+ATTR = re.compile(r"(\w+)='([^']*)'")
+ESC = re.compile(r"([\\`*_\[\]<>#|])")
+CHIP = re.compile(r"<\?claude block (\w+)\?>")
+CAP = 30000  # server cap is 32768 bytes of inline content per write
+
+
+def parse(xml):
+    """Tiny parser for the docs XML: returns nested dicts {tag, attrs, children} / text strings."""
+    root = {"tag": "root", "attrs": {}, "children": []}
+    stack = [root]
+    for m in TOKEN.finditer(xml):
+        close, tag, attrs, selfclose, text = m.groups()
+        if text is not None:
+            stack[-1]["children"].append(html.unescape(text))
+        elif close:
+            stack.pop()
+        else:
+            el = {"tag": tag, "attrs": {k: html.unescape(v) for k, v in ATTR.findall(attrs)}, "children": []}
+            stack[-1]["children"].append(el)
+            if not selfclose:
+                stack.append(el)
+    return root["children"][0]
+
+
+def esc(s, in_table):
+    s = ESC.sub(r"\\\1", s)
+    if not in_table:
+        s = s.replace("\\|", "|")
+    return s
+
+
+class Md:
+    def __init__(self):
+        self.blocks = {}
+
+    def chip(self, spec):
+        key = f"c{len(self.blocks) + 1}"
+        self.blocks[key] = spec
+        return f"<?claude block {key}?>"
+
+    def runs(self, el, marks=()):
+        """Flatten a <text> element into (text, marks) runs."""
+        out = []
+        for c in el["children"]:
+            if isinstance(c, str):
+                out.append((c, marks))
+            elif c["tag"] in ("bold", "italic", "code", "strike"):
+                out += self.runs(c, marks + (c["tag"],))
+            elif c["tag"] == "link":
+                out += self.runs(c, marks + (("link", c["attrs"]["href"]),))
+            else:
+                raise SystemExit(f"unknown inline mark <{c['tag']}>")
+        return out
+
+    def inline(self, el, in_table=False):
+        runs = []
+        for c in el["children"]:
+            if isinstance(c, str):
+                runs.append((c, ()))
+            elif c["tag"] == "text":
+                runs += self.runs(c)
+            elif c["tag"] == "mention":
+                a = c["attrs"]
+                spec = ({"type": "mention", "user": "me"} if a.get("self") == "true" else
+                        {"type": "mention", "user": a["user"]}) if "user" in a else \
+                       {"type": "mention", "ref": a["ref"], **({"label": a["label"]} if "label" in a else {})}
+                runs.append((None, self.chip(spec)))
+            elif c["tag"] == "date":
+                runs.append((None, self.chip({"type": "date", "value": c["attrs"]["value"]})))
+            else:
+                raise SystemExit(f"unknown inline <{c['tag']}>")
+        merged = []
+        for t, m in runs:
+            if merged and t is not None and merged[-1][0] is not None and merged[-1][1] == m:
+                merged[-1] = (merged[-1][0] + t, m)
+            else:
+                merged.append((t, m))
+        out = []
+        for t, m in merged:
+            if t is None:
+                out.append(m)
+                continue
+            if "code" in m:
+                s = "`" + t + "`"
+            else:
+                s = esc(t, in_table)
+            core = s.strip(" ")
+            if not core:  # only spaces, e.g. between two marked runs
+                out.append(s)
+                continue
+            lead = len(s) - len(s.lstrip(" "))
+            trail = len(s) - len(s.rstrip(" "))
+            for mark in m:
+                if mark == "bold":
+                    core = "**" + core + "**"
+                elif mark == "italic":
+                    core = "*" + core + "*"
+                elif mark == "strike":
+                    core = "~~" + core + "~~"
+                elif isinstance(mark, tuple):
+                    core = "[" + core + "](" + mark[1] + ")"
+            out.append(" " * lead + core + " " * trail)
+        return "".join(out)
+
+    def block(self, el, indent=""):
+        tag = el["tag"]
+        if tag == "paragraph":
+            h = el["attrs"].get("heading")
+            text = self.inline(el)
+            return [indent + ("#" * int(h) + " " if h else "") + text]
+        if tag == "embed":
+            a = el["attrs"]
+            spec = {"type": "embed", "ref": a["ref"]}
+            if "caption" in a:
+                spec["caption"] = a["caption"]
+            return [indent + self.chip(spec)]
+        if tag == "list":
+            kind = el["attrs"].get("kind", "bullet")
+            lines = []
+            for n, item in enumerate(el["children"], 1):
+                if kind == "ordered":
+                    bullet = f"{n}. "
+                elif kind == "check":
+                    bullet = "- [x] " if item["attrs"].get("checked") == "true" else "- [ ] "
+                else:
+                    bullet = "- "
+                first = True
+                for sub in item["children"]:
+                    if sub["tag"] == "paragraph" and first:
+                        lines.append(indent + bullet + self.inline(sub))
+                        first = False
+                    else:
+                        lines.append("")
+                        lines += self.block(sub, indent + "    ")
+            return lines
+        if tag == "table":
+            rows = []
+            for row in el["children"]:
+                cells = []
+                for cell in row["children"]:
+                    paras = [self.inline(p, in_table=True) for p in cell["children"]]
+                    cells.append("<br>".join(paras))
+                rows.append(cells)
+            header = all(c["attrs"].get("header") == "true" for c in el["children"][0]["children"])
+            if not header:
+                raise SystemExit("table without a header row is not supported")
+            lines = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join("---" for _ in rows[0]) + " |"]
+            lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+            return [indent + l for l in lines]
+        raise SystemExit(f"unknown block <{tag}>")
+
+
+def to_markdown(xml):
+    doc = parse(xml)
+    md = Md()
+    parts = ["\n".join(md.block(b)) for b in doc["children"] if isinstance(b, dict)]
+    return "\n\n".join(parts) + "\n", md.blocks, doc
+
+
+def render(md, blocks):
+    """Replace chip placeholders by a stable text form, for comparing two versions."""
+    def spec(k):
+        v = dict(blocks.get(k) or {})
+        if v.get("type") == "mention":
+            v.pop("label", None)  # the server fills labels in itself
+        return json.dumps(v, ensure_ascii=False, sort_keys=True)
+    return CHIP.sub(lambda m: spec(m.group(1)), md)
+
+
+def norm(s):
+    return [l.rstrip() for l in s.strip().splitlines()]
+
+
+def same(md_a, blocks_a, md_b, blocks_b):
+    return norm(render(md_a, blocks_a)) == norm(render(md_b, blocks_b))
+
+
+def sha(*parts):
+    h = hashlib.sha256()
+    for p in parts:
+        h.update(p.encode())
+    return h.hexdigest()
+
+
+def doc_hash(xml):
+    """Hash of the doc's text, blind to formatting the markdown does not carry (e.g. column widths)."""
+    md, blocks, _ = to_markdown(xml)
+    return sha("\n".join(norm(render(md, blocks))))
+
+
+def h1(md):
+    m = re.search(r"^# (.+)$", md or "", re.M)
+    return m.group(1).strip() if m else None
+
+
+def md_source(part, blocks):
+    used = {k: blocks[k] for k in CHIP.findall(part)}
+    return {"as": "markdown", "from": {"kind": "inline", "content": part}, **({"blocks": used} if used else {})}
+
+
+def chunks(md):
+    """Split markdown between top-level blocks into parts under CAP bytes: [(text, cont)].
+    A table larger than CAP is split by rows; cont=True marks rows to append to the table before it."""
+    blocks = re.split(r"\n\n(?=\S)", md.strip("\n"))
+    parts, cur = [], ""
+
+    def add(b):
+        nonlocal cur
+        cand = cur + ("\n\n" if cur else "") + b
+        if len(cand.encode()) > CAP:
+            parts.append((cur, False))
+            cand = b
+        cur = cand
+
+    for b in blocks:
+        if len(b.encode()) <= CAP:
+            add(b)
+            continue
+        lines = b.split("\n")
+        if not (lines[0].startswith("|") and len(lines) > 3):
+            sys.exit("a single non-table block is larger than the write cap; split it")
+        head, rows, groups, g = lines[:2], lines[2:], [], []
+        for r in rows:
+            if len("\n".join(head + g + [r]).encode()) > CAP and g:
+                groups.append(g)
+                g = []
+            g.append(r)
+        groups.append(g)
+        add("\n".join(head + groups[0]))
+        parts.append((cur, False))
+        cur = ""
+        for g in groups[1:]:
+            parts.append(("\n".join(head + g), True))
+    if cur:
+        parts.append((cur, False))
+    return [(p + "\n", c) for p, c in parts]
+
+
+def top_ids(xml):
+    """Full ids of the top-level blocks; ids print short after the first full one: ".90" = "<prefix>.90"."""
+    full, prefix = [], ""
+    for i in [c["attrs"]["id"] for c in parse(xml)["children"] if isinstance(c, dict)]:
+        if not i.startswith("."):
+            prefix = i.split(".")[0]
+        full.append(i if not i.startswith(".") else prefix + i)
+    return full
+
+
+def full_ids(xml):
+    """Top-level blocks as (tag, full id, [full row ids]); ids print short after the first full one:
+    ".90" = "<prefix>.90"."""
+    out, pref = [], ""
+
+    def full(i):
+        nonlocal pref
+        if not i.startswith("."):
+            pref = i.split(".")[0]
+            return i
+        return pref + i
+    for c in parse(xml)["children"]:
+        if isinstance(c, dict):
+            i = full(c["attrs"]["id"])
+            rows = [full(r["attrs"]["id"]) for r in c["children"] if isinstance(r, dict) and r["tag"] == "row"]
+            out.append((c["tag"], i, rows))
+    return out
