@@ -23,8 +23,10 @@ class Paths(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(REPO, found[0])), found[0])
 
     def test_plugin_root_paths_in_skills_and_hooks_exist(self):
-        sources = [os.path.join("skills", "docs-local", "SKILL.md"), os.path.join("hooks", "hooks.json")]
-        paths = [(src, p) for src in sources for p in ROOT_VAR.findall(text(src))]
+        hooks = json.loads(text("hooks", "hooks.json"))["hooks"]
+        commands = [h["command"] for groups in hooks.values() for g in groups for h in g["hooks"]]
+        paths = [("skills/docs-local/SKILL.md", p) for p in ROOT_VAR.findall(text("skills", "docs-local", "SKILL.md"))]
+        paths += [("hooks/hooks.json", p) for c in commands for p in ROOT_VAR.findall(c)]
         self.assertTrue(paths)
         for src, p in paths:
             self.assertTrue(os.path.exists(os.path.join(REPO, p)), f"{src}: {p}")
