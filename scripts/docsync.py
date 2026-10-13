@@ -1148,7 +1148,7 @@ def project_list(args):
 def project_check(args):
     """For the model: the state of the current folder, one word plus the project root."""
     state, root = project_state(os.getcwd())
-    print(json.dumps({"state": state, "root": root}))
+    print(json.dumps({"state": state, "root": root, "update": pending_update()}))
 
 
 def project_use(args):
@@ -1242,17 +1242,34 @@ def update_apply(args):
         "(it keeps the saved settings and asks only for new ones).")
 
 
-def remind_update():
-    """At most once a day: one line if a newer version exists."""
+def pending_update():
+    """A newer version, if any: {"current", "latest", "breaking"} or None.
+    Checks the repository at most once a day and keeps the answer in the user config, so every command
+    (the user's docsync and the model's project check) reports the same thing without going online each time."""
     u = load_user()
     now = int(datetime.datetime.now().timestamp())
-    if now - u.get("update_checked", 0) < 86400:
-        return
-    u["update_checked"] = now
-    save_user(u)
-    info = update_info()
-    if not info.get("error") and info["behind"]:
-        warn(f"! docs-local {info['latest']} is available" + (" (breaking)" if info["breaking"] else "")
+    cache = u.get("update") or {}
+    if now - cache.get("checked", 0) >= 86400:
+        info = update_info()
+        if info.get("error"):
+            cache = {"checked": now}
+        else:
+            cache = {"checked": now, "latest": info["latest"], "breaking": info["breaking"]}
+        u["update"] = cache
+        u.pop("update_checked", None)
+        save_user(u)
+    cur = (read_text(os.path.join(SKILL_DIR, "VERSION")) or "0").strip()
+    latest = cache.get("latest")
+    if not latest or version_of(latest) <= version_of(cur):
+        return None
+    return {"current": cur, "latest": latest, "breaking": version_of(latest)[:1] > version_of(cur)[:1]}
+
+
+def remind_update():
+    """For people: one line about a newer version (from pending_update)."""
+    up = pending_update()
+    if up:
+        warn(f"! docs-local {up['latest']} is available" + (" (breaking)" if up["breaking"] else "")
              + ": ask Claude to update docs-local")
 
 
@@ -1262,12 +1279,13 @@ MODES = {
              "The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` "
              "and `update` commands: never sync, pull, push or status, and does not remind about syncing."),
     "model": ("Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs "
-              "artifact, or sets docs up for local work. Edit the local files; run docsync at the start and end of "
-              "doc work.",
-              "Claude syncs: run `python3 <skill folder>/scripts/docsync.py` from the project before working on its "
-              "docs (to get the user's changes in the doc) and again after editing. It prints JSON: `events` and "
-              "`conflicts`. Exit code 2 = conflicts: stop, say which tab and why, and resolve only as the user "
-              "decides; 1 = error: show it as is."),
+              "artifact, or sets docs up for local work. Edit the local files; run docsync at the start of each request "
+              "that involves docs and after all its work is done.",
+              "Claude syncs: run `python3 <skill folder>/scripts/docsync.py` from the project at the start of each "
+              "user request that involves its docs (to get the user's changes in the doc), and once more after all "
+              "the work for that request is done. It prints JSON: `events`, `conflicts`, `update`. Exit code 2 = "
+              "conflicts: stop, say which tab and why, and resolve only as the user decides; 1 = error: show it as "
+              "is."),
 }
 
 
@@ -1309,7 +1327,7 @@ def run_sync(args):
     total = {}
     for n, root in enumerate(roots):
         os.chdir(root)
-        if n:
+        if n and not JSON:
             print()
         STATS.clear()
         CTX["project"] = project_name(root)
@@ -1334,8 +1352,9 @@ def run_sync(args):
         RESULT.append({"project": CTX["project"], "root": root,
                        **{k: STATS[k] for k in ("docs", "checked") + COUNTED if STATS.get(k)}})
     if JSON:
-        print(json.dumps({"projects": RESULT, "events": EVENTS, "conflicts": CONFLICTS}, ensure_ascii=False, indent=1))
-    if len(roots) > 1 and args.cmd != "status":
+        print(json.dumps({"projects": RESULT, "events": EVENTS, "conflicts": CONFLICTS, "update": pending_update()},
+                         ensure_ascii=False, indent=1))
+    if len(roots) > 1 and args.cmd != "status" and not JSON:
         print()
         total["projects"] = len(roots)
         say(summary(total, "project"))

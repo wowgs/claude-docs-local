@@ -15,7 +15,21 @@ Projects opt in one by one. Before a task first reads or changes a doc in this s
 
 - **`local`:** work through local files. A doc the task needs that is not set up yet: `docsync.py doc add <link>`, without asking, then work on its files.
 - **`declined`:** work with Docs the usual way, through the Docs tools; don't ask.
-- **`unknown`:** ask once with AskUserQuestion: "Work with this project's docs as local files?" Yes → `docsync.py doc add <link>`. No → `docsync.py project decline`, then work with Docs the usual way.
+- **`unknown`** (a project setup did not ask about, e.g. a new one): ask exactly this with AskUserQuestion, then act on the answer:
+  ```json
+  {"questions": [{
+    "question": "Work with this project's Claude Docs as local files?",
+    "header": "Local docs",
+    "multiSelect": false,
+    "options": [
+      {"label": "Yes", "description": "Claude keeps this project's docs as local files and edits them there."},
+      {"label": "No", "description": "Claude works with the docs as usual and won't ask again in this project."}
+    ]
+  }]}
+  ```
+  "Yes" → `docsync.py doc add <link>`; "No" → `docsync.py project decline`, then work with Docs the usual way.
+
+`project check` also returns `update`: if it is not null, tell the user in one line that docs-local `<latest>` is available, and offer to update (below).
 
 `doc add` makes the doc's folder (`docs/<doc name>/`), writes `docsync.json`, registers the project and pulls every tab. Show its error as is if it fails.
 
@@ -25,7 +39,24 @@ The user syncs with the `docsync` command. Claude runs the script only for `proj
 
 ## Updating
 
-`docsync.py update check` says whether a newer version of this skill exists (the user's `docsync` also says so once a day). To update: if it is `breaking`, tell the user what changes (its `changes`) and ask with AskUserQuestion; then `docsync.py update apply` (`--yes` for a breaking one), then follow SETUP.md again.
+`docsync` checks for a newer version at most once a day and reports it the same way to the user (a line from `docsync`) and to Claude (`update` in the JSON of `project check`, and of sync in mode model). To update when the user agrees:
+
+- not breaking: `docsync.py update apply`;
+- breaking: first ask exactly this with AskUserQuestion, filling in the versions and one line summing up the **Breaking** notes from `docsync.py update check`:
+  ```json
+  {"questions": [{
+    "question": "docs-local <latest> changes how it works: <one-line summary of the Breaking notes>. Update now?",
+    "header": "Update",
+    "multiSelect": false,
+    "options": [
+      {"label": "Update", "description": "Install <latest>; Claude then reruns setup and keeps your settings."},
+      {"label": "Not now", "description": "Stay on <current>; docsync keeps reminding you once a day."}
+    ]
+  }]}
+  ```
+  "Update" → `docsync.py update apply --yes`.
+
+After `update apply`, follow SETUP.md again.
 
 ## Files
 
