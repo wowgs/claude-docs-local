@@ -4,7 +4,7 @@ import datetime, glob, json, os, statistics, sys
 
 W = sys.argv[1]
 RES = os.path.join(W, "results")
-VARIANTS = (("A", "Docs tools"), ("S", "docs-local, Sync"), ("F", "docs-local, Push"))
+VARIANTS = (("A", "Official Docs MCP"), ("S", "docs-local, Sync"), ("F", "docs-local, Push"))
 
 
 def ts(s):

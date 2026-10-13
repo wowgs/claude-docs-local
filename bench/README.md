@@ -1,10 +1,10 @@
 # Benchmark
 
-One Claude Code session edits a large claude.ai doc through the Docs tools. Another session makes the same edits with docs-local, where the doc is already local. With docs-local, Claude answered 2 to 3 times sooner, and each run cost less than half as much.
+One Claude Code session edits a large claude.ai doc through the official Docs MCP. Another session makes the same edits with docs-local, where the doc is already local. With docs-local, Claude answered 2 to 3 times sooner, and each run cost less than half as much.
 
 ## Results
 
-| Mean (min–max) of 3 runs | Docs tools | docs-local, Sync | docs-local, Push |
+| Mean (min–max) of 3 runs | Official Docs MCP | docs-local, Sync | docs-local, Push |
 |---|---|---|---|
 | Time until Claude answers, s | 80.8 (76.2–84.5) | 42.0 (37.7–45.9) | 26.4 (23.2–28.6) |
 | Model steps that call a tool | 22.3 (22–23) | 6.0 (5–7) | 5.7 (5–6) |
@@ -17,7 +17,7 @@ One Claude Code session edits a large claude.ai doc through the Docs tools. Anot
 
 A model step is one request to Claude. Claude reads the context, thinks and writes the next tool call. Each step took about 3 seconds, however small the call was.
 
-The Docs tools search and change one tab per call, so each search and each edit is one more step. With local files, one command searches or changes every tab.
+The Docs MCP tools search and change one tab per call, so each search and each edit is one more step. With local files, one command searches or changes every tab.
 
 The rows under the first one do not add up to it. The start of Claude Code and Claude's last reply are not in them.
 
@@ -35,7 +35,7 @@ The prompt gives only the link to the doc. It is the same for every variant.
 
 | Variant | Setup |
 |---|---|
-| Docs tools | A plain Claude Code session. It edits the doc through the Claude Docs tools. |
+| Official Docs MCP | A plain Claude Code session. It edits the doc through the official Claude Docs MCP. |
 | docs-local, Sync | Sync mode `auto`. The doc is already local. When Claude finishes, a hook syncs the edits before Claude answers. |
 | docs-local, Push | Sync mode `auto-force`. The doc is already local. When Claude finishes, a hook pushes the edits in the background, after Claude answers. |
 
