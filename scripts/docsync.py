@@ -13,6 +13,7 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync project list      your projects: using local docs, and declined
   docsync project check | use | decline   for the model: this folder's state, opt in, opt out
   docsync setup scan        for the model: folders Claude Code has worked in, with their state
+  docsync update check | apply [--yes]   newer versions of this skill (git); then setup runs again
 
 Project: docsync.json at its root, {"name": "<project>", "docs": {"<dir>": {"id": "<doc id>", "name": "<doc name>"}}},
 one folder per doc: <tab>.md, <tab>.blocks.json, <tab>.widget-<id>.jsx, .docsync-state.json.
@@ -891,6 +892,8 @@ def render(md, blocks):
 
 
 CONFIG = "docsync.json"
+SCHEMA = 1  # structure of the user config and of docsync.json; a change is a breaking update (CHANGELOG.md)
+SKILL_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 
 
 def user_config():
@@ -920,6 +923,7 @@ def projects():
 
 
 def save_user(u):
+    u.setdefault("schema", SCHEMA)
     p = user_config()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     json.dump(u, open(p, "w"), ensure_ascii=False, indent=1)
@@ -1015,6 +1019,7 @@ def doc_add(args):
         sys.exit(f"cannot read that doc (deleted, no access, or not a Claude Doc): {args.link}")
     name = o["value"].get("name") or doc_id
     cfg = json.load(open(CONFIG)) if os.path.exists(CONFIG) else {}
+    cfg.setdefault("schema", SCHEMA)
     cfg.setdefault("name", os.path.basename(root.rstrip(os.sep)) or root)
     cfg.setdefault("docs", {})
     for d, v in cfg["docs"].items():
@@ -1089,6 +1094,81 @@ def setup_scan(args):
     print(json.dumps({"projects": out, "note": note}, ensure_ascii=False, indent=1))
 
 
+def git(*a):
+    return subprocess.run(["git", "-C", SKILL_DIR, *a], capture_output=True, text=True)
+
+
+def version_of(text):
+    try:
+        return tuple(int(x) for x in text.strip().split("."))
+    except ValueError:
+        return (0,)
+
+
+def changelog_since(text, cur):
+    """Changelog sections of versions newer than cur."""
+    out = []
+    for part in re.split(r"(?m)^## ", text)[1:]:
+        v = version_of(part.split()[0])
+        if v > cur:
+            out.append("## " + part.strip())
+    return out
+
+
+def update_info(fetch=True):
+    if not os.path.isdir(os.path.join(SKILL_DIR, ".git")):
+        return {"error": f"{SKILL_DIR} is not a git clone; reinstall it from its repository"}
+    if fetch:
+        r = git("fetch", "--quiet")
+        if r.returncode:
+            return {"error": "cannot reach the repository: " + (r.stderr.strip() or "git fetch failed")}
+    cur_s = (read_text(os.path.join(SKILL_DIR, "VERSION")) or "0").strip()
+    new = git("show", "@{u}:VERSION")
+    if new.returncode:
+        return {"error": "no upstream branch: " + new.stderr.strip()}
+    cur, latest = version_of(cur_s), version_of(new.stdout)
+    behind = int((git("rev-list", "--count", "HEAD..@{u}").stdout or "0").strip() or 0)
+    log = git("show", "@{u}:CHANGELOG.md").stdout
+    return {"current": cur_s, "latest": new.stdout.strip(), "behind": behind,
+            "breaking": latest[:1] > cur[:1], "changes": changelog_since(log, cur)}
+
+
+def update_check(args):
+    print(json.dumps(update_info(), ensure_ascii=False, indent=1))
+
+
+def update_apply(args):
+    info = update_info()
+    if info.get("error"):
+        sys.exit(info["error"])
+    if not info["behind"]:
+        say(f"docs-local {info['current']} is up to date")
+        return
+    if info["breaking"] and not args.yes:
+        sys.exit(f"{info['current']} -> {info['latest']} is a breaking update: tell the user what changes "
+                 "(docsync update check), then run docsync update apply --yes")
+    git("checkout", "--", ".")  # drop what setup wrote into the skill's files; setup writes it again
+    r = git("pull", "--ff-only", "--quiet")
+    if r.returncode:
+        sys.exit("update failed: " + (r.stderr.strip() or "git pull failed"))
+    say(f"docs-local {info['current']} -> {info['latest']}. Next: follow SETUP.md again "
+        "(it keeps the saved settings and asks only for new ones).")
+
+
+def remind_update():
+    """At most once a day: one line if a newer version exists."""
+    u = load_user()
+    now = int(datetime.datetime.now().timestamp())
+    if now - u.get("update_checked", 0) < 86400:
+        return
+    u["update_checked"] = now
+    save_user(u)
+    info = update_info()
+    if not info.get("error") and info["behind"]:
+        say(paint(f"! docs-local {info['latest']} is available" + (" (breaking)" if info["breaking"] else "")
+                  + ": ask Claude to update docs-local", "33"))
+
+
 def installed_globally():
     """Is this script inside the user's Claude Code skills folder?"""
     conf = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
@@ -1126,6 +1206,7 @@ def run_sync(args):
         print()
         total["projects"] = len(roots)
         say(summary(total, "project"))
+    remind_update()
 
 
 def main():
@@ -1147,6 +1228,10 @@ def main():
     for c, h in (("use", "this project uses local docs"), ("decline", "this project does not; don't ask again")):
         a = proj.add_parser(c, help=h)
         a.add_argument("path", nargs="?")
+    upd = sub.add_parser("update", help="newer versions of this skill").add_subparsers(dest="sub", required=True)
+    upd.add_parser("check", help="is a newer version available (JSON)")
+    a = upd.add_parser("apply", help="install it; then setup runs again")
+    a.add_argument("--yes", action="store_true", help="also a breaking update")
     setup = sub.add_parser("setup", help="for the model during setup").add_subparsers(dest="sub", required=True)
     setup.add_parser("scan", help="folders Claude Code has worked in, with their state (JSON)")
     args = p.parse_args()
@@ -1161,6 +1246,7 @@ def main():
     try:
         {"doc": {"add": doc_add, "list": doc_list},
          "project": {"list": project_list, "check": project_check, "use": project_use, "decline": project_decline},
+         "update": {"check": update_check, "apply": update_apply},
          "setup": {"scan": setup_scan}}.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
     finally:
         if _live:

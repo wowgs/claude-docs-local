@@ -21,7 +21,11 @@ Projects opt in one by one. Before a task first reads or changes a doc in this s
 
 ## Syncing
 
-The user syncs with the `docsync` command. Claude runs the script only for `project` and `doc` commands: never sync, pull, push or status, and does not remind about syncing.
+The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc` and `update` commands: never sync, pull, push or status, and does not remind about syncing.
+
+## Updating
+
+`docsync.py update check` says whether a newer version of this skill exists (the user's `docsync` also says so once a day). To update: if it is `breaking`, tell the user what changes (its `changes`) and ask with AskUserQuestion; then `docsync.py update apply` (`--yes` for a breaking one), then follow SETUP.md again.
 
 ## Files
 
