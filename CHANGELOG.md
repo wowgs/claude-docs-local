@@ -2,6 +2,10 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version) and its section has **Migration (for the model)**: what to change in the user's files during setup.
 
+## 2.0.1 — 2026-10-13
+
+The marketplace takes both plugins from `master`; a release is a new `version` in `plugin.json` (README).
+
 ## 2.0.0 — 2026-10-13
 
 Installed as two plugins from the `wowgs` marketplace instead of a git clone in `~/.claude/skills`; Claude Code fetches and updates them.
