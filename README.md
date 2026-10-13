@@ -16,9 +16,9 @@ Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/mar
 
 `/docs-local` turns a project on, `/docs-local remove` turns it off.
 
-Needs: claude.ai login in Claude Code, the Claude Docs connector, git, Python 3.9+.
+Needs: claude.ai login in Claude Code, Claude Docs connector, git, Python 3.9+.
 
-macOS and Linux. Windows: best effort, untested.
+Tested on macOS and Linux. Windows: best effort :)
 
 ## Use
 
