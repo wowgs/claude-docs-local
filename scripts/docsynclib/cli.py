@@ -11,6 +11,7 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync doc list          docs of this project
   docsync project list      your projects
   docsync project check | use | remove   for the model: this folder's state, turn local docs on, off
+  docsync setup scan        for the model during setup: folders Claude Code has worked in
   docsync setup --mode user|model [--project <folder>]...   for the model during setup
   docsync uninstall         remove the docsync command and settings; docs stay
 
@@ -170,9 +171,33 @@ def shell_command():
     return {"command": link, "on_path": on_path, "add_to_path": None if on_path else f"{rc}: {line}"}, None
 
 
+def setup_scan():
+    """For the model: folders Claude Code has worked in (from ~/.claude.json, best effort) and their state."""
+    home = os.path.expanduser("~")
+    conf = os.environ.get("CLAUDE_CONFIG_DIR")
+    src = os.path.join(conf, ".claude.json") if conf else os.path.join(home, ".claude.json")
+    try:
+        paths = list(load_json(src).get("projects", {}).keys())
+        note = None
+    except Exception as e:  # internal file of Claude Code: may be missing or change format
+        paths, note = [], f"could not read {src}: {type(e).__name__}"
+    skip = {home, os.path.join(home, "Downloads"), os.path.join(home, "Desktop"), os.path.join(home, "Documents")}
+    found = []
+    for path in sorted(set(paths)):
+        if not os.path.isdir(path) or path in skip or "/Downloads/" in path + "/" and path != home:
+            continue
+        state, root = project_state(path)
+        found.append({"path": path, "label": path.replace(home, "~", 1), "state": state})
+    print(json.dumps({"projects": found, "note": note}, ensure_ascii=False, indent=1))
+
+
 def setup(args):
-    """Everything setup does after the user's two answers, then a check of the result. Prints one JSON report:
-    `ok`, what is in place, `todo` (what only the user can do) and `errors`. Safe to run again."""
+    """Everything setup does after the user's answers, then a check of the result. Prints one JSON report:
+    `ok`, what is in place, `todo` (what only the user can do) and `errors`. Safe to run again.
+    `setup scan` instead lists the folders to ask the user about."""
+    if args.action == "scan":
+        setup_scan()
+        return
     u = load_user()
     mode = args.mode or u.get("sync")
     if mode not in MODES:
@@ -308,6 +333,7 @@ def parser():
         a = proj.add_parser(c, help=h)
         a.add_argument("path", nargs="?")
     a = sub.add_parser("setup", help="for the model during setup: settings, the shell command, projects; then a check")
+    a.add_argument("action", nargs="?", choices=["scan"], help="scan: list the folders to ask about (JSON)")
     a.add_argument("--mode", choices=sorted(MODES), help="who syncs (the saved choice when left out)")
     a.add_argument("--project", action="append", default=[], metavar="FOLDER", help="turn local docs on here; repeatable")
     sub.add_parser("hook", help="for Claude Code: the hook on the Docs create tool")

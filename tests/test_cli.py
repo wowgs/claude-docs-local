@@ -83,6 +83,16 @@ class Cli(Sandbox):
         self.assertEqual(self.setup("--mode", "model")["mode"], "model")
         self.assertEqual(self.setup()["mode"], "model")  # the saved choice
 
+    def test_setup_scan_lists_the_folders_claude_code_has_seen(self):
+        os.makedirs(self.path("other"))
+        self.write("claude/.claude.json", json.dumps({"projects": {
+            self.path("proj"): {}, self.path("other"): {}, self.path("gone"): {}}}))
+        self.run_ok("project", "use", cwd=self.path("proj"))
+        out = json.loads(self.run_ok("setup", "scan"))
+        self.assertIsNone(out["note"])
+        self.assertEqual({p["path"]: p["state"] for p in out["projects"]},
+                         {self.path("proj"): "local", self.path("other"): "unknown"})
+
     def test_setup_does_everything_and_reports(self):
         self.installed("docs-local@wowgs", "docs-local-files@wowgs")
         proj = self.path("proj")

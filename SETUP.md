@@ -20,9 +20,24 @@ Once, after `claude plugin install docs-local --marketplace https://wowgs.uk/plu
    }]}
    ```
    "I do" → `user`; "Claude does" → `model`.
-3. **This folder.** Only if the working folder is not the home folder, ask with AskUserQuestion, options "Yes" and "No":
-   `Keep the Claude Docs of <working folder> as local files?` Other projects are turned on later with `/docs-local` in each.
-4. **Run** `docsync setup --mode <user|model>`, plus `--project <working folder>` if the answer to step 3 was "Yes".
+3. **Projects.** Only if step 2 asked. Run `docsync setup scan` and take its `unknown` projects. If there are none, or it returns a `note`, skip this step. Otherwise ask with AskUserQuestion:
+   - Split the projects into the fewest groups of at most 4. Make the groups as equal as possible: 5 = 3 + 2, 8 = 4 + 4, 9 = 3 + 3 + 3.
+   - Ask one group per AskUserQuestion call, with one question in it. Wait for the answer before you ask about the next group.
+   - Each group is a multiSelect question. Its options are the projects: `label` and `path` from the scan. For example:
+     ```json
+     {"questions": [{
+       "question": "Which of these projects should keep their Claude Docs as local files?",
+       "header": "Projects 1/2",
+       "multiSelect": true,
+       "options": [
+         {"label": "~/my-app", "description": "/home/me/my-app"},
+         {"label": "~/blog", "description": "/home/me/blog"},
+         {"label": "~/notes", "description": "/home/me/notes"}
+       ]
+     }]}
+     ```
+   - If there is only one project, ask the same question with the options "Yes" and "No".
+4. **Run** `docsync setup --mode <user|model>`, plus `--project <path>` for each project chosen in step 3.
 5. **Tell the user in one line** whether docs-local is installed (`ok` in the output); add the `todo` lines, or the `errors` if `ok` is false. Nothing else.
 
 ## Updates
