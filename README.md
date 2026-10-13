@@ -16,7 +16,7 @@ Install the skill globally from https://github.com/wowgs/docs-local, then follow
 
 Setup asks one or two questions: who syncs (you with `docsync`, or Claude), and which of your projects keep their docs as local files. A doc is set up the first time Claude works on it in such a project.
 
-Requirements: Claude Code logged in with a claude.ai account, the Claude Docs connector on that account, Python 3. No packages to install.
+Requirements: Claude Code logged in with a claude.ai account, the Claude Docs connector on that account, Python 3.9 or newer — on macOS it comes with the Command Line Tools, which git needs anyway. No packages to install.
 
 ## Use
 

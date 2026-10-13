@@ -27,6 +27,9 @@ Exit codes: 0 done, 1 error, 2 conflicts.
 """
 import argparse, datetime, hashlib, html, json, os, platform, re, shutil, subprocess, sys, urllib.error, urllib.request, uuid
 
+if sys.version_info < (3, 9):
+    sys.exit(f"docsync needs Python 3.9 or newer; this is {sys.version.split()[0]}")
+
 SERVER_NAME = "Claude Docs"
 API = "https://api.anthropic.com"
 PROXY = "https://mcp-proxy.anthropic.com/v1/mcp/"
