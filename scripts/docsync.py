@@ -1271,8 +1271,7 @@ def update_apply(args):
     r = git("pull", "--ff-only", "--quiet")
     if r.returncode:
         sys.exit("update failed: " + (r.stderr.strip() or "git pull failed"))
-    say(f"docs-local {info['current']} -> {info['latest']}. Next: follow SETUP.md again "
-        "(it keeps the saved settings and asks only for new ones).")
+    say(f"docs-local {info['current']} -> {info['latest']}. Next: follow SETUP.md, \"Install\".")
 
 
 def pending_update():
@@ -1309,7 +1308,7 @@ def remind_update():
 MODES = {
     "user": "The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` "
             "and `update` commands: never sync, pull, push or status, and does not remind about syncing.",
-    "model": "Claude syncs: run `python3 <skill folder>/scripts/docsync.py` from the project at the start of each "
+    "model": "Run `python3 <skill folder>/scripts/docsync.py` from the project at the start of each "
              "user request that involves its docs, and once more after all the work for that request is done. "
              "It prints JSON: `events`, `conflicts`, `update`. Exit code 2 = conflicts: stop, say which tab and why, "
              "and resolve only as the user decides; 1 = error: show it as is.",
@@ -1327,7 +1326,7 @@ def setup_mode(args):
     path = os.path.join(SKILL_DIR, "SKILL.md")
     s = read_text(path) or ""
     para = MODES[mode]
-    new = re.sub(r"(## Syncing\n\n)(.+?)(\n\n|\Z)", lambda m: m.group(1) + para + m.group(3), s, count=1, flags=re.S)
+    new = re.sub(r"(?m)^(3\. \*\*Sync:\*\* ).*$", lambda m: m.group(1) + para, s, count=1)
     if new != s:
         open(path, "w").write(new)
     print(json.dumps({"mode": mode, "skill_md": "updated" if new != s else "unchanged"}))
