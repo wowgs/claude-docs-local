@@ -80,8 +80,12 @@ class Cli(Sandbox):
         self.assertEqual(r.returncode, 1)
         self.assertIn("ask the user", r.stderr)
         self.installed("docs-local@wowgs", "docs-local-files@wowgs")
-        self.assertEqual(self.setup("--mode", "auto")["mode"], "auto")
-        self.assertEqual(self.setup()["mode"], "auto")  # the saved choice
+        first = self.setup("--mode", "auto")
+        self.assertEqual(first["mode"], "auto")
+        self.assertIn("start a new Claude Code session (or run /reload-plugins)", first["todo"])  # plugins load then
+        again = self.setup()
+        self.assertEqual(again["mode"], "auto")  # the saved choice
+        self.assertEqual(again["todo"], [])
 
     def test_setup_scan_lists_the_folders_claude_code_has_seen(self):
         os.makedirs(self.path("other"))

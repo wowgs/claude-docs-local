@@ -2,7 +2,7 @@
 
 Claude Code edits your claude.ai Docs as local markdown files. `docsync` syncs them back.
 
-Use it only for docs that you edit alone: a sync rewrites whole tabs, so other people's edits end in conflicts.
+Use it only for docs that you edit alone: a sync rewrites whole tabs, so other people's edits end in conflicts, or get overwritten if you choose that local files win.
 
 Works only with Docs artifacts. Diagrams and charts sync, images are not supported.
 
@@ -16,7 +16,7 @@ Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/mar
 
 `/docs-local` turns a project on, `/docs-local remove` turns it off.
 
-Needs: claude.ai login in Claude Code, the Claude Docs connector, Python 3.9+.
+Needs: claude.ai login in Claude Code, the Claude Docs connector, git, Python 3.9+.
 
 ## Use
 

@@ -12,7 +12,7 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync project list      your projects
   docsync project check | use | remove   for the model: this folder's state, turn local docs on, off
   docsync setup scan        for the model during setup: folders Claude Code has worked in
-  docsync setup --mode user|model [--project <folder>]...   for the model during setup
+  docsync setup --mode user|auto|auto-force [--project <folder>]...   for the model during setup
   docsync uninstall         remove the docsync command and settings; docs stay
 
 Project: a root in your config, with docsync.json there: {"name": "<project>", "docs": {"<dir>": {"id": "<doc id>",
@@ -204,9 +204,10 @@ def setup(args):
         setup_scan()
         return
     u = load_user()
+    first = "sync" not in u
     mode = args.mode or u.get("sync")
     if mode not in MODES:
-        sys.exit("no saved mode: ask the user, then run docsync setup --mode user|model")
+        sys.exit("no saved mode: ask the user, then run docsync setup --mode user|auto|auto-force")
     u["sync"] = mode
     save_user(u)
     errors, todo = [], []
@@ -234,8 +235,8 @@ def setup(args):
             errors.append(err)
         elif shell.get("add_to_path"):
             todo.append("add to " + shell["add_to_path"])
-    if new:
-        todo.append("start a new Claude Code session (or run /reload-plugins) in: " + ", ".join(new))
+    if first or new:  # Claude Code loads plugins at session start, not while a session runs
+        todo.append("start a new Claude Code session (or run /reload-plugins)" + (" in: " + ", ".join(new) if new else ""))
     print(json.dumps({"ok": not errors, "mode": mode, "plugins": plugins, "projects": projects(), "shell": shell,
                       "todo": todo, "errors": errors}, ensure_ascii=False, indent=1))
     if errors:
