@@ -21,7 +21,7 @@ Projects opt in one by one. Before a task first reads or changes a doc in this s
 
 ## Syncing
 
-The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc` and `update` commands: never sync, pull, push or status, and does not remind about syncing.
+The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` and `update` commands: never sync, pull, push or status, and does not remind about syncing.
 
 ## Updating
 

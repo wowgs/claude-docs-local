@@ -21,6 +21,8 @@ Your settings and projects: ~/.config/docsync/config.json ($XDG_CONFIG_HOME, %AP
 Declined projects are listed in that file and never asked about again.
 Login: Claude Code's claude.ai login, read on each run and never stored.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
+Output: for people in mode "user", one JSON document in mode "model" (--json / --human override).
+Exit codes: 0 done, 1 error, 2 conflicts.
 """
 import argparse, datetime, hashlib, html, json, os, platform, re, shutil, subprocess, sys, urllib.error, urllib.request, uuid
 
@@ -35,6 +37,14 @@ _url = None
 
 # ---------------------------------------------------------------- output
 TTY = sys.stdout.isatty()
+JSON = False  # mode "model": no human output, one JSON document at the end
+EVENTS = []   # every result line, for the JSON document
+CONFLICTS = 0
+
+
+def warn(msg):
+    """Warnings go to stderr, so they never mix with the result."""
+    sys.stderr.write(("\x1b[33m" + msg + "\x1b[0m" if sys.stderr.isatty() else msg) + "\n")
 _live = False
 STATS = {}
 
@@ -111,6 +121,8 @@ def redraw():
 def say(*a, kind=None):
     """A permanent line; clears the live line first."""
     global _live
+    if JSON:
+        return
     if BUF is not None:
         BUF.append(" ".join(str(x) for x in a))
         redraw()
@@ -182,9 +194,15 @@ def doc_end():
 def ev(kind, path, detail=""):
     """One result line: icon, verb, path, detail — aligned, coloured in a terminal.
     Inside a doc: under its header, the path shown relative to the doc folder."""
+    global CONFLICTS
     icon, verb, color = STYLE[kind]
     if kind in COUNTED:
         STATS[kind] = STATS.get(kind, 0) + 1
+    if kind == "conflict":
+        CONFLICTS += 1
+    EVENTS.append({"project": CTX["project"], "doc": DOC and DOC["name"], "kind": kind,
+                   "path": path[len(DOC["dir"]) + 1:] if DOC and path.startswith(DOC["dir"] + "/") else path,
+                   "detail": detail})
     indent = "  "
     if DOC:
         if not DOC["shown"]:
@@ -1234,8 +1252,41 @@ def remind_update():
     save_user(u)
     info = update_info()
     if not info.get("error") and info["behind"]:
-        say(paint(f"! docs-local {info['latest']} is available" + (" (breaking)" if info["breaking"] else "")
-                  + ": ask Claude to update docs-local", "33"))
+        warn(f"! docs-local {info['latest']} is available" + (" (breaking)" if info["breaking"] else "")
+             + ": ask Claude to update docs-local")
+
+
+MODES = {
+    "user": ("Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs "
+             "artifact, or sets docs up for local work. Edit the local files only; the user syncs them with docsync.",
+             "The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` "
+             "and `update` commands: never sync, pull, push or status, and does not remind about syncing."),
+    "model": ("Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs "
+              "artifact, or sets docs up for local work. Edit the local files; run docsync at the start and end of "
+              "doc work.",
+              "Claude syncs: run `python3 <skill folder>/scripts/docsync.py` from the project before working on its "
+              "docs (to get the user's changes in the doc) and again after editing. It prints JSON: `events` and "
+              "`conflicts`. Exit code 2 = conflicts: stop, say which tab and why, and resolve only as the user "
+              "decides; 1 = error: show it as is."),
+}
+
+
+def setup_mode(args):
+    """Save the sync mode (or reuse the saved one) and write it into this skill's SKILL.md."""
+    u = load_user()
+    mode = args.mode or u.get("sync")
+    if mode not in MODES:
+        sys.exit("no saved mode: ask the user, then run docsync setup mode user|model")
+    u["sync"] = mode
+    save_user(u)
+    path = os.path.join(SKILL_DIR, "SKILL.md")
+    s = read_text(path) or ""
+    desc, para = MODES[mode]
+    new = re.sub(r"(?m)^description: .*$", lambda m: "description: " + desc, s, count=1)
+    new = re.sub(r"(## Syncing\n\n)(.+?)(\n\n|\Z)", lambda m: m.group(1) + para + m.group(3), new, count=1, flags=re.S)
+    if new != s:
+        open(path, "w").write(new)
+    print(json.dumps({"mode": mode, "skill_md": "updated" if new != s else "unchanged"}))
 
 
 def installed_globally():
@@ -1243,6 +1294,9 @@ def installed_globally():
     conf = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     skills = os.path.realpath(os.path.join(conf, "skills")) + os.sep
     return os.path.realpath(__file__).startswith(skills)
+
+
+RESULT = []
 
 
 def run_sync(args):
@@ -1277,6 +1331,10 @@ def run_sync(args):
                 say(line)
         for k, v in STATS.items():
             total[k] = total.get(k, 0) + v
+        RESULT.append({"project": CTX["project"], "root": root,
+                       **{k: STATS[k] for k in ("docs", "checked") + COUNTED if STATS.get(k)}})
+    if JSON:
+        print(json.dumps({"projects": RESULT, "events": EVENTS, "conflicts": CONFLICTS}, ensure_ascii=False, indent=1))
     if len(roots) > 1 and args.cmd != "status":
         print()
         total["projects"] = len(roots)
@@ -1292,6 +1350,8 @@ def main():
         a = sub.add_parser(c, help=h)
         a.add_argument("dirs", nargs="*", help="limit to these doc folders")
         a.add_argument("--force", action="store_true", help="override the safety checks")
+        a.add_argument("--json", action="store_true", help="one JSON document (the default in mode model)")
+        a.add_argument("--human", action="store_true", help="output for people (the default in mode user)")
     doc = sub.add_parser("doc", help="docs of the current project").add_subparsers(dest="sub", required=True)
     a = doc.add_parser("add", help="set up a doc here and pull it")
     a.add_argument("link")
@@ -1309,24 +1369,32 @@ def main():
     a.add_argument("--yes", action="store_true", help="also a breaking update")
     setup = sub.add_parser("setup", help="for the model during setup").add_subparsers(dest="sub", required=True)
     setup.add_parser("scan", help="folders Claude Code has worked in, with their state (JSON)")
+    a = setup.add_parser("mode", help="save who syncs (or reuse the saved choice) and write it into SKILL.md")
+    a.add_argument("mode", nargs="?", choices=sorted(MODES))
     args = p.parse_args()
     args.cmd = args.cmd or "sync"
     for k, v in (("dirs", []), ("force", False)):
         if not hasattr(args, k):
             setattr(args, k, v)
     args.config = CONFIG
-    if args.cmd in ("sync", "status", "pull", "push") and not installed_globally():
-        say(paint("! docs-local is not installed globally (~/.claude/skills): sessions in other projects "
-                  "won't know their docs are local", "33"))
+    global JSON, TTY
+    if args.cmd in ("sync", "status", "pull", "push"):
+        JSON = getattr(args, "json", False) or (load_user().get("sync") == "model" and not getattr(args, "human", False))
+        if JSON:
+            TTY = False
+        if not installed_globally():
+            warn("! docs-local is not installed globally (~/.claude/skills): sessions in other projects "
+                 "won't know their docs are local")
     try:
         {"doc": {"add": doc_add, "list": doc_list},
          "project": {"list": project_list, "check": project_check, "use": project_use, "decline": project_decline},
          "update": {"check": update_check, "apply": update_apply},
-         "setup": {"scan": setup_scan}}.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
+         "setup": {"scan": setup_scan, "mode": setup_mode}}.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
     finally:
         if _live:
             sys.stdout.write("\r\x1b[2K")
             sys.stdout.flush()
+    sys.exit(2 if CONFLICTS else 0)  # 0 done, 1 error (sys.exit with a message), 2 conflicts
 
 
 def summary(st, unit):
