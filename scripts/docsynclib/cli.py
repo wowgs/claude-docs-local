@@ -11,15 +11,15 @@ rewrites a whole tab, so comments on the replaced text lose their anchor.
   docsync doc list          docs of this project
   docsync project list      your projects
   docsync project check | use | remove   for the model: this folder's state, turn local docs on, off
-  docsync update check | apply [--yes]   newer versions of this skill (git); then setup runs again
   docsync setup shell | mode | scan | claude   for the model during setup
   docsync uninstall         remove the docsync command and settings; docs stay
 
 Project: a root in your config, with docsync.json there: {"name": "<project>", "docs": {"<dir>": {"id": "<doc id>",
 "name": "<doc name>"}}}; one folder per doc: <tab>.md, <tab>.blocks.json, <tab>.widget-<id>.jsx, .docsync-state.json.
 Your settings and projects: ~/.config/docsync/config.json ($XDG_CONFIG_HOME, %APPDATA% on Windows).
-Claude Code settings: the skill is hidden from the model outside your projects (~/.claude/settings.json);
-in each project .claude/settings.local.json lists it and turns off the Docs tools that write, except comments.
+Claude Code: plugins docs-local and docs-local-files from the wowgs marketplace; docs-local-files is off in
+~/.claude/settings.json and on in each project's .claude/settings.local.json, which also turns off the Docs tools
+that write, except comments. Claude Code updates the plugins (claude plugin update).
 Login: Claude Code's claude.ai login, read on each run and never stored.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
 Output: for people in mode "user", one JSON document in mode "model" (--json / --human override).
@@ -27,24 +27,22 @@ Exit codes: 0 done, 1 error, 2 conflicts.
 """
 import argparse, json, os, platform, re, shutil, sys
 
-from . import SCRIPT, SKILL_DIR
 from . import output as out
-from .claude import (edit_json, decide, hide, installed_globally, lock, project_settings, turn_off, turn_on,
-                     unhide, unlock, user_settings)
-from .files import read_text, slug
+from .claude import (FILES, PLUGIN, edit_json, decide, hide, lock, project_settings, turn_off, turn_on, unhide,
+                     unlock, user_settings)
+from .files import slug
 from .mcp import call
 from .projects import (CONFIG, SCHEMA, entry, load_user, project_name, project_of, project_state, projects,
                        save_cfg, save_user, targets, user_config)
 from .sync import cmd_sync
-from .update import git, pending_update, remind_update, update_info
-from .textio import load_json, write
+from .textio import load_json, read, write
 
 MODES = {
-    "user": "The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` "
-            "and `update` commands: never sync, pull, push or status, and does not remind about syncing.",
-    "model": "Run `python3 <skill folder>/scripts/docsync.py` from the project at the start of each "
+    "user": "The user syncs with the `docsync` command. Claude runs it only for `project`, `doc` and `setup` "
+            "commands: never sync, pull, push or status, and does not remind about syncing.",
+    "model": "Run `docsync` from the project at the start of each "
              "user request that involves its docs, and once more after all the work for that request is done. "
-             "It prints JSON: `events`, `conflicts`, `update`. Exit code 2 = conflicts: stop, say which tab and why, "
+             "It prints JSON: `events`, `conflicts`. Exit code 2 = conflicts: stop, say which tab and why, "
              "and resolve only as the user decides; 1 = error: show it as is.",
 }
 RESULT = []
@@ -108,9 +106,14 @@ def project_list(args):
 
 
 def project_check(args):
-    """For the model: the state of the current folder, one word plus the project root."""
+    """For the model: the state of the current folder, one word plus the project root; whether setup ran, and
+    the sync rule for the mode it chose. A project's Claude Code settings are rewritten here, so a newer version
+    that Claude Code installed brings its settings in on first use."""
     state, root = project_state(os.getcwd())
-    print(json.dumps({"state": state, "root": root, "update": pending_update()}))
+    if root:
+        edit_json(project_settings(root), lock)
+    mode = load_user().get("sync")
+    print(json.dumps({"state": state, "root": root, "setup": mode in MODES, "sync": MODES.get(mode)}))
 
 
 def project_use(args):
@@ -130,13 +133,13 @@ def project_remove(args):
 
 
 def setup_claude(args):
-    """Claude Code settings: the skill hidden from the model outside your projects, and each project's
-    settings (re)written, so the hook points at this copy of the script."""
+    """Claude Code settings: docs-local-files off outside your projects (and what 1.x wrote removed), and each
+    project's settings (re)written."""
     edit_json(user_settings(), hide)
     for r in projects():
         if os.path.isdir(r):
             edit_json(project_settings(r), lock)
-    print(json.dumps({"global": "user-invocable-only", "projects": projects()}))
+    print(json.dumps({"global": {FILES: False}, "projects": projects()}))
 
 
 def setup_scan(args):
@@ -160,69 +163,55 @@ def setup_scan(args):
 
 
 def setup_mode(args):
-    """Save the sync mode (or reuse the saved one) and write it into this skill's SKILL.md."""
+    """Save the sync mode (or reuse the saved one); `project check` hands its rule to the model."""
     u = load_user()
     mode = args.mode or u.get("sync")
     if mode not in MODES:
         sys.exit("no saved mode: ask the user, then run docsync setup mode user|model")
     u["sync"] = mode
     save_user(u)
-    path = os.path.join(SKILL_DIR, "SKILL.md")
-    s = read_text(path) or ""
-    new = re.sub(r"(?m)^(3\. \*\*Sync:\*\* ).*$", lambda m: m.group(1) + MODES[mode], s, count=1)
-    if new != s:
-        write(path, new)
-    print(json.dumps({"mode": mode, "skill_md": "updated" if new != s else "unchanged"}))
+    print(json.dumps({"mode": mode}))
 
 
 def bin_dir():
     return os.environ.get("XDG_BIN_HOME") or os.path.join(os.path.expanduser("~"), ".local", "bin")
 
 
+SHIM_MARK = "# docsync shim (docs-local)"
+SHIM = f"""#!/usr/bin/env python3
+{SHIM_MARK}: runs the copy of the plugin that Claude Code installed; its path changes with every update.
+import json, os, sys
+base = os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR") or os.path.join(
+    os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "plugins")
+try:
+    recs = json.load(open(os.path.join(base, "installed_plugins.json")))["plugins"]["{PLUGIN}"]
+    root = next((r for r in recs if r.get("scope") == "user"), recs[0])["installPath"]
+except (OSError, ValueError, KeyError, IndexError, TypeError):
+    sys.exit("docs-local is not installed in Claude Code: claude plugin install {PLUGIN}")
+script = os.path.join(root, "scripts", "docsync.py")
+os.execv(sys.executable, [sys.executable, script] + sys.argv[1:])
+"""
+
+
 def setup_shell(args):
-    """The `docsync` command: a link in ~/.local/bin to this script (mode user)."""
+    """The `docsync` command for people: a small script in ~/.local/bin (mode user)."""
     if platform.system() == "Windows":
-        print(json.dumps({"link": None, "note": "no link on Windows: run python " + SCRIPT}))
+        print(json.dumps({"link": None, "note": "no shell command on Windows: run python <plugin>/scripts/docsync.py"}))
         return
     d = bin_dir()
     link = os.path.join(d, "docsync")
     os.makedirs(d, exist_ok=True)
-    if os.path.lexists(link):
-        if os.path.islink(link) and os.path.realpath(link) == SCRIPT:
-            pass
-        elif os.path.islink(link):
-            os.remove(link)  # an older link, e.g. to a previous install
-        else:
-            sys.exit(f"{link} exists and is not a link to docsync; move it away, then run setup shell again")
-    if not os.path.lexists(link):
-        os.symlink(SCRIPT, link)
-    os.chmod(SCRIPT, os.stat(SCRIPT).st_mode | 0o111)
+    if os.path.islink(link):
+        os.remove(link)  # 1.x: a link into the skill folder
+    elif os.path.exists(link) and SHIM_MARK not in read(link):
+        sys.exit(f"{link} exists and is not docsync; move it away, then run setup shell again")
+    write(link, SHIM)
+    os.chmod(link, 0o755)
     on_path = d in os.environ.get("PATH", "").split(os.pathsep)
     shell = os.path.basename(os.environ.get("SHELL", ""))
     add = None if on_path else (f"fish_add_path {d}" if shell == "fish" else f'export PATH="{d}:$PATH"')
     rc = {"zsh": "~/.zshrc", "bash": "~/.bashrc", "fish": "~/.config/fish/config.fish"}.get(shell, "your shell's startup file")
     print(json.dumps({"link": link, "on_path": on_path, "add_to_path": add, "rc_file": None if on_path else rc}))
-
-
-def update_check(args):
-    print(json.dumps(update_info(), ensure_ascii=False, indent=1))
-
-
-def update_apply(args):
-    info = update_info()
-    if info.get("error"):
-        sys.exit(info["error"])
-    if not info["behind"]:
-        out.say(f"docs-local {info['current']} is up to date")
-        return
-    if info["breaking"] and not args.yes:
-        sys.exit(f"{info['current']} -> {info['latest']} is a breaking update: tell the user what changes "
-                 "(docsync update check), then run docsync update apply --yes")
-    git("checkout", "--", ".")  # drop what setup wrote into the skill's files; setup writes it again
-    r = git("pull", "--ff-only", "--quiet")
-    if r.returncode:
-        sys.exit("update failed: " + (r.stderr.strip() or "git pull failed"))
-    out.say(f"docs-local {info['current']} -> {info['latest']}. Next: follow SETUP.md, \"Install\".")
 
 
 def hook(args):
@@ -239,7 +228,7 @@ def uninstall(args):
     """Remove what docsync put outside the skill folder; the docs and their files stay."""
     removed = []
     link = os.path.join(bin_dir(), "docsync")
-    if os.path.islink(link) and os.path.realpath(link) == SCRIPT:
+    if os.path.isfile(link) and not os.path.islink(link) and SHIM_MARK in read(link):
         os.remove(link)
         removed.append(link)
     for f in [project_settings(r) for r in projects()]:
@@ -247,16 +236,17 @@ def uninstall(args):
             edit_json(f, unlock)
             removed.append(f"docs-local settings in {f}")
     g = user_settings()
-    if os.path.exists(g) and "docs-local" in load_json(g).get("skillOverrides", {}):
+    if os.path.exists(g) and FILES in load_json(g).get("enabledPlugins", {}):
         edit_json(g, unhide)
-        removed.append(f"docs-local in {g}")
+        removed.append(f"{FILES} in {g}")
     p = user_config()
     if os.path.isdir(os.path.dirname(p)):
         shutil.rmtree(os.path.dirname(p))
         removed.append(os.path.dirname(p))
     for r in removed:
         out.say(f"removed {r}")
-    out.say(f"Left as they are: the docs' local files and each project's docsync.json. To finish, delete the skill: {SKILL_DIR}")
+    out.say("Left as they are: the docs' local files and each project's docsync.json. To finish: "
+            f"claude plugin uninstall {FILES}; claude plugin uninstall {PLUGIN}")
 
 
 def run_sync(args):
@@ -290,13 +280,12 @@ def run_sync(args):
         RESULT.append({"project": out.CTX["project"], "root": root,
                        **{k: out.STATS[k] for k in ("docs", "checked") + out.COUNTED if out.STATS.get(k)}})
     if out.JSON:
-        print(json.dumps({"projects": RESULT, "events": out.EVENTS, "conflicts": out.CONFLICTS,
-                          "update": pending_update()}, ensure_ascii=False, indent=1))
+        print(json.dumps({"projects": RESULT, "events": out.EVENTS, "conflicts": out.CONFLICTS},
+                         ensure_ascii=False, indent=1))
     if len(roots) > 1 and args.cmd != "status" and not out.JSON:
         print()
         total["projects"] = len(roots)
         out.say(out.summary(total, "project"))
-    remind_update()
 
 
 def parser():
@@ -320,16 +309,12 @@ def parser():
     for c, h in (("use", "local docs on for this project"), ("remove", "local docs off for this project; files stay")):
         a = proj.add_parser(c, help=h)
         a.add_argument("path", nargs="?")
-    upd = sub.add_parser("update", help="newer versions of this skill").add_subparsers(dest="sub", required=True)
-    upd.add_parser("check", help="is a newer version available (JSON)")
-    a = upd.add_parser("apply", help="install it; then setup runs again")
-    a.add_argument("--yes", action="store_true", help="also a breaking update")
     setup = sub.add_parser("setup", help="for the model during setup").add_subparsers(dest="sub", required=True)
     setup.add_parser("scan", help="folders Claude Code has worked in, with their state (JSON)")
     setup.add_parser("shell", help="the docsync command: a link in ~/.local/bin (JSON)")
-    a = setup.add_parser("mode", help="save who syncs (or reuse the saved choice) and write it into SKILL.md")
+    a = setup.add_parser("mode", help="save who syncs (or reuse the saved choice)")
     a.add_argument("mode", nargs="?", choices=sorted(MODES))
-    setup.add_parser("claude", help="Claude Code settings: skill hidden outside your projects, Docs writes off in them")
+    setup.add_parser("claude", help="Claude Code settings: the files skill off outside your projects, on in them")
     sub.add_parser("hook", help="for Claude Code: the hook on the Docs create tool")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     return p
@@ -338,7 +323,6 @@ def parser():
 COMMANDS = {
     "doc": {"add": doc_add, "list": doc_list},
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove},
-    "update": {"check": update_check, "apply": update_apply},
     "setup": {"scan": setup_scan, "mode": setup_mode, "shell": setup_shell, "claude": setup_claude},
     "hook": {None: hook},
     "uninstall": {None: uninstall},
@@ -356,9 +340,6 @@ def main(argv=None):
         out.JSON = getattr(args, "json", False) or (load_user().get("sync") == "model" and not getattr(args, "human", False))
         if out.JSON:
             out.TTY = False
-        if not installed_globally():
-            out.warn("! docs-local is not installed globally (~/.claude/skills): sessions in other projects "
-                     "won't know their docs are local")
     try:
         COMMANDS.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
     finally:

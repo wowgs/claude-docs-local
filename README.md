@@ -1,6 +1,6 @@
 # docs-local
 
-A Claude Code skill: Claude works on your claude.ai Docs as local markdown files, and `docsync` keeps them in sync with claude.ai.
+A Claude Code plugin: Claude works on your claude.ai Docs as local markdown files, and `docsync` keeps them in sync with claude.ai.
 
 Editing local files is faster and cheaper than editing a doc through tool calls, and the files are greppable and diffable.
 
@@ -11,14 +11,14 @@ Editing local files is faster and cheaper than editing a doc through tool calls,
 Paste this into Claude Code:
 
 ```
-Install the skill globally from https://github.com/wowgs/docs-local, then follow its SETUP.md.
+Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json`, then follow the plugin's SETUP.md.
 ```
 
-Setup asks one or two questions: who syncs (you with `docsync`, or Claude), and which of your projects keep their docs as local files. Later, turn on another project by typing `/docs-local` in it, and turn one off with `/docs-local remove`.
+Setup asks one or two questions: who syncs (you with `docsync`, or Claude), and which of your projects keep their docs as local files. Later, turn on another project by typing `/docs-local` in it, and turn one off with `/docs-local remove`; then `/reload-plugins`.
 
 In a project that is on, Claude cannot write to its docs through the Docs tools, only comments: it edits the local files. In other projects Claude does not see the skill.
 
-Requirements: Claude Code logged in with a claude.ai account, the Claude Docs connector on that account, Python 3.9 or newer — on macOS it comes with the Command Line Tools, which git needs anyway. No packages to install.
+Requirements: Claude Code logged in with a claude.ai account, the Claude Docs connector on that account, Python 3.9 or newer — on macOS it comes with the Command Line Tools. No packages to install.
 
 ## Use
 
@@ -38,11 +38,13 @@ docsync project remove      turn local docs off for this project (files stay)
 docsync uninstall
 ```
 
-It removes the `docsync` command, your docsync settings and what it added to Claude Code's settings, then tells you the skill folder to delete. Your docs and their local files stay.
+It removes the `docsync` command, your docsync settings and what it added to Claude Code's settings, then tells you the two `claude plugin uninstall` commands. Your docs and their local files stay.
 
 ## Development
 
-`scripts/docsync.py` is the command; the code is in `scripts/docsynclib/`: `cli` (commands), `sync` (one project's docs), `markdown` (doc XML ↔ markdown), `files` (a doc's local folder), `projects` (your config), `claude` (Claude Code settings and the hook), `mcp` (the Claude Docs connector), `update`, `output`. Standard library only, Python 3.9+.
+Two plugins from this repository: `docs-local` at the root (the `/docs-local` command in `skills/`, the hook in `hooks/`, `bin/docsync`, setup) is on everywhere; `docs-local-files` in `files/` (the skill that says this project's docs are local) is on only in projects that use local docs. A release is a `claude plugin tag` per plugin and the new tags in the marketplace file.
+
+`scripts/docsync.py` is the command; the code is in `scripts/docsynclib/`: `cli` (commands), `sync` (one project's docs), `markdown` (doc XML ↔ markdown), `files` (a doc's local folder), `projects` (your config), `claude` (Claude Code settings and the hook), `mcp` (the Claude Docs connector), `output`. Standard library only, Python 3.9+.
 
 Tests, offline (a fake Docs server stands in for claude.ai):
 

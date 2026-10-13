@@ -1,23 +1,18 @@
 ---
 name: docs-local
 description: Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs artifact, or sets docs up for local work.
-argument-hint: "[remove]"
+user-invocable: false
 ---
 
 # Docs as local files
 
 Edit a doc's local files, never the doc through Docs tools.
 
-Invoked with the argument `remove`: run `python3 <skill folder>/scripts/docsync.py project remove` in the working folder, tell the user local docs are off for this project (the files stay), and stop.
-
 ## Workflow
 
-1. Run `python3 <skill folder>/scripts/docsync.py project check` in the working folder, once per session:
-   - `local` → step 2. A doc the task needs that is not local yet: `docsync.py doc add <link>`, without asking.
-   - `unknown` → the user turned this project on with /docs-local: `docsync.py project use` (or `doc add <link>` for the doc at hand).
-   - `update` not null → tell the user in one line that docs-local `<latest>` is available; to update: [SETUP.md](SETUP.md), "Update".
+1. Run `docsync project check` in the working folder, once per session. A doc the task needs that is not local yet: `docsync doc add <link>`, without asking.
 2. Edit the files (below). Docs tools write only comments here: reply in a comment thread with them, and make the edit a comment asks for in the files.
-3. **Sync:** The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` and `update` commands: never sync, pull, push or status, and does not remind about syncing.
+3. **Sync:** follow `sync` from `project check`.
 
 ## Files
 

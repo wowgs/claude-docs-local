@@ -1,14 +1,14 @@
 # Setup
 
-`<skill folder>` below is this skill's base directory.
+`<plugin folder>` below is where Claude Code installed the `docs-local` plugin: its `installPath` in `claude plugin list --json`. Before `/reload-plugins` the `docsync` command isn't on your PATH yet, so run `python3 <plugin folder>/scripts/docsync.py` wherever this file says `docsync`.
 
 ## Install
 
-After installing this skill and after every update.
+Once, after `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json`.
 
-1. **Read the user config**: `~/.config/docsync/config.json` (`$XDG_CONFIG_HOME/docsync/` if set; `%APPDATA%\docsync\` on Windows). Missing = a first install.
-2. **Bring the config up to date.** This version uses config schema 1 (structure in CHANGELOG.md, newest section). If the user config, or the `docsync.json` of any project in its `"projects"`, has an older `"schema"` (or none but other keys), change them to the current structure, following the **Migration** notes in CHANGELOG.md for every version in between. Keep every value the user chose. Set `"schema"` to the current number. Tell the user in one line what you changed.
-3. **Sync mode.** If the config has `"sync"`, run `python3 <skill folder>/scripts/docsync.py setup mode`. Otherwise ask exactly this with AskUserQuestion:
+1. **Plugins.** If `claude plugin list` lacks `docs-local-files@wowgs`, run `claude plugin install docs-local-files@wowgs`.
+2. **Version 1.x.** If `~/.claude/skills/docs-local/scripts/docsync.py` exists, that folder is the old install: delete the folder. Step 4 removes what it wrote into Claude Code's settings; its user config and projects stay.
+3. **Sync mode.** If `docsync setup mode` prints a mode, keep it. Otherwise ask exactly this with AskUserQuestion:
    ```json
    {"questions": [{
      "question": "Who syncs your local docs with claude.ai?",
@@ -20,10 +20,10 @@ After installing this skill and after every update.
      ]
    }]}
    ```
-   "I do" → `docsync.py setup mode user`; "Claude does" → `docsync.py setup mode model`. Don't edit SKILL.md by hand.
-4. **Claude Code settings:** run `docsync.py setup claude`.
-5. **Mode `user` only:** run `docsync.py setup shell`. If it returns `on_path` false, tell the user the one line to add (`add_to_path`) to their shell startup file (`rc_file`); don't edit it yourself.
-6. **Projects — only if step 1 found no config.** Run `python3 <skill folder>/scripts/docsync.py setup scan`. If it returns no `unknown` projects (or a `note`), skip. Otherwise ask one multiSelect question with AskUserQuestion; options are the `unknown` projects, `label` and `path` from the scan. For example:
+   "I do" → `docsync setup mode user`; "Claude does" → `docsync setup mode model`.
+4. **Claude Code settings:** `docsync setup claude`.
+5. **Mode `user` only:** `docsync setup shell`. If it returns `on_path` false, tell the user the one line to add (`add_to_path`) to their shell startup file (`rc_file`); don't edit it yourself.
+6. **Projects — only if step 3 asked.** Run `docsync setup scan`. If it returns no `unknown` projects (or a `note`), skip. Otherwise ask one multiSelect question with AskUserQuestion; options are the `unknown` projects, `label` and `path` from the scan. For example:
    ```json
    {"questions": [{
      "question": "Which of these projects should keep their Claude Docs as local files?",
@@ -35,26 +35,9 @@ After installing this skill and after every update.
      ]
    }]}
    ```
-   2–4 options per question; more projects → more questions in the same call (up to 4), and beyond that ask for the rest in the reply. A single project → the same question with options "Yes" and "No". Chosen → `docsync.py project use <path>`.
-7. **Report in one line:** the version (`<skill folder>/VERSION`), the mode, what changed, which projects use local docs.
+   2–4 options per question; more projects → more questions in the same call (up to 4), and beyond that ask for the rest in the reply. A single project → the same question with options "Yes" and "No". Chosen → `docsync project use <path>`.
+7. **Report in one line:** the version (`version` in `claude plugin list --json`), the mode, what changed, which projects use local docs; then ask the user to run `/reload-plugins`.
 
-## Update
+## Updates
 
-When the user agrees to update:
-
-- not breaking: `python3 <skill folder>/scripts/docsync.py update apply`;
-- breaking: first ask exactly this with AskUserQuestion, filling in the versions and one line summing up the **Breaking** notes from `docsync.py update check`:
-  ```json
-  {"questions": [{
-    "question": "docs-local <latest> changes how it works: <one-line summary of the Breaking notes>. Update now?",
-    "header": "Update",
-    "multiSelect": false,
-    "options": [
-      {"label": "Update", "description": "Install <latest>; Claude then reruns setup and keeps your settings."},
-      {"label": "Not now", "description": "Stay on <current>; docsync keeps reminding you once a day."}
-    ]
-  }]}
-  ```
-  "Update" → `docsync.py update apply --yes`.
-
-Then follow "Install" again.
+Claude Code updates both plugins: step 4 turns on auto-update for the `wowgs` marketplace, and `claude plugin update docs-local@wowgs` does it at once. A new version brings its settings into a project the first time its skill runs there (`docsync project check`), so nothing here runs again.

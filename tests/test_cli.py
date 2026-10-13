@@ -1,4 +1,4 @@
-"""The docsync command end to end, on a copy of the skill in a sandbox (setup writes into the skill's SKILL.md)."""
+"""The docsync command end to end, on a copy of the plugin in a sandbox."""
 import json, os, shutil, subprocess, sys, unittest
 
 from support import SCRIPTS, Sandbox
@@ -13,8 +13,6 @@ class Cli(Sandbox):
         self.skill = self.path("skill")
         shutil.copytree(SCRIPTS, os.path.join(self.skill, "scripts"),
                         ignore=shutil.ignore_patterns("__pycache__"))
-        for f in ("SKILL.md", "VERSION"):
-            shutil.copy(os.path.join(REPO, f), self.skill)
         self.script = os.path.join(self.skill, "scripts", "docsync.py")
         os.makedirs(self.path("proj"))
 
@@ -29,18 +27,21 @@ class Cli(Sandbox):
 
     def test_help_lists_the_commands(self):
         out = self.run_ok("-h")
-        for c in ("sync", "status", "doc", "project", "update", "setup", "uninstall"):
+        for c in ("sync", "status", "doc", "project", "setup", "uninstall"):
             self.assertIn(c, out)
 
     def test_project_on_check_list_off(self):
         proj = self.path("proj")
-        self.assertEqual(json.loads(self.run_ok("project", "check", cwd=proj))["state"], "unknown")
+        check = json.loads(self.run_ok("project", "check", cwd=proj))
+        self.assertEqual((check["state"], check["setup"], check["sync"]), ("unknown", False, None))
         self.assertEqual(json.loads(self.run_ok("project", "use", cwd=proj))["root"], proj)
         os.makedirs(self.path("proj/sub"))
         self.assertEqual(json.loads(self.run_ok("project", "check", cwd=self.path("proj/sub")))["root"], proj)
         s = textio.load_json(self.path("proj/.claude/settings.local.json"))
-        self.assertEqual(s["skillOverrides"], {"docs-local": "on"})
-        self.assertIn(self.script, s["hooks"]["PreToolUse"][0]["hooks"][0]["command"])
+        self.assertEqual(s["enabledPlugins"], {"docs-local-files@wowgs": True})
+        os.remove(self.path("proj/.claude/settings.local.json"))
+        self.run_ok("project", "check", cwd=proj)  # writes the project's settings again
+        self.assertEqual(textio.load_json(self.path("proj/.claude/settings.local.json")), s)
         self.assertIn("proj", self.run_ok("project", "list"))
         self.run_ok("project", "remove", cwd=self.path("proj/sub"))
         self.assertFalse(os.path.exists(self.path("proj/.claude/settings.local.json")))
@@ -57,24 +58,39 @@ class Cli(Sandbox):
         self.assertIn("no projects with docs", r.stderr)
 
     def test_the_hook_denies_everything_but_comments(self):
-        ok = self.run_ok("hook", stdin=json.dumps({"tool_input": {"object": "utterance"}}))
+        proj = self.path("proj")
+        self.run_ok("project", "use", cwd=proj)
+        ok = self.run_ok("hook", stdin=json.dumps({"cwd": proj, "tool_input": {"object": "utterance"}}))
         self.assertEqual(ok, "")
-        no = json.loads(self.run_ok("hook", stdin=json.dumps({"tool_input": {"object": "file"}})))
+        no = json.loads(self.run_ok("hook", stdin=json.dumps({"cwd": proj, "tool_input": {"object": "file"}})))
         self.assertEqual(no["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertEqual(self.run_ok("hook", stdin="not json"), "")
 
-    def test_setup_mode_writes_the_sync_step(self):
-        self.assertEqual(json.loads(self.run_ok("setup", "mode", "model"))["skill_md"], "updated")
-        self.assertIn("3. **Sync:** Run `python3", textio.read(os.path.join(self.skill, "SKILL.md")))
+    def test_setup_mode_hands_the_rule_to_project_check(self):
+        self.assertEqual(json.loads(self.run_ok("setup", "mode", "model"))["mode"], "model")
+        check = json.loads(self.run_ok("project", "check", cwd=self.path("proj")))
+        self.assertTrue(check["setup"])
+        self.assertTrue(check["sync"].startswith("Run `docsync` from the project"))
         self.run_ok("setup", "mode", "user")
-        self.assertEqual(textio.read(os.path.join(self.skill, "SKILL.md")), textio.read(os.path.join(REPO, "SKILL.md")))
         self.assertEqual(json.loads(self.run_ok("setup", "mode"))["mode"], "user")
 
-    def test_setup_shell_link_runs_the_command(self):
+    def test_setup_shell_command_finds_the_installed_plugin(self):
         out = json.loads(self.run_ok("setup", "shell"))
         self.assertEqual(out["link"], os.path.join(self.env["XDG_BIN_HOME"], "docsync"))
         r = subprocess.run([out["link"], "project", "list"], capture_output=True, text=True, env=dict(os.environ))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not installed in Claude Code", r.stderr)
+        self.write("claude/plugins/installed_plugins.json", json.dumps({"version": 2, "plugins": {
+            "docs-local@wowgs": [{"scope": "user", "installPath": self.skill}]}}))
+        r = subprocess.run([out["link"], "project", "list"], capture_output=True, text=True, env=dict(os.environ))
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(self.run_ok("setup", "shell"))["link"], out["link"])  # its own file: rewritten
+
+    def test_setup_shell_keeps_a_foreign_file(self):
+        self.write("bin/docsync", "#!/bin/sh\necho mine\n")
+        r = self.run_cli("setup", "shell")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(textio.read(self.path("bin/docsync")), "#!/bin/sh\necho mine\n")
 
     def test_setup_claude_then_uninstall_restore_the_settings(self):
         g = self.path("claude/settings.json")
@@ -82,7 +98,7 @@ class Cli(Sandbox):
         self.write("proj/.claude/settings.local.json", '{"permissions": {"deny": ["Bash(rm *)"]}}')
         self.run_ok("project", "use", cwd=self.path("proj"))
         self.run_ok("setup", "claude")
-        self.assertEqual(textio.load_json(g)["skillOverrides"], {"docs-local": "user-invocable-only"})
+        self.assertEqual(textio.load_json(g)["enabledPlugins"], {"docs-local-files@wowgs": False})
         self.run_ok("setup", "shell")
         self.run_ok("uninstall")
         self.assertEqual(textio.load_json(g), {"model": "x"})

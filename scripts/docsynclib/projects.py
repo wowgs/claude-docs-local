@@ -31,6 +31,7 @@ def load_user():
 
 def save_user(u):
     u.setdefault("schema", SCHEMA)
+    u.pop("update", None)  # 1.x: the cache of its own update check; Claude Code updates the plugin now
     p = user_config()
     os.makedirs(os.path.dirname(p), exist_ok=True)
     write(p, json.dumps(u, ensure_ascii=False, indent=1))

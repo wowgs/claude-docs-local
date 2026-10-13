@@ -1,0 +1,3 @@
+#!/bin/sh
+# docsync for Claude's Bash tool: this folder is on its PATH while the plugin is enabled.
+exec python3 "$(dirname "$0")/../scripts/docsync.py" "$@"
