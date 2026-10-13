@@ -133,8 +133,7 @@ def project_remove(args):
 
 
 def setup_claude(args):
-    """Claude Code settings: docs-local-files off outside your projects (and what 1.x wrote removed), and each
-    project's settings (re)written."""
+    """Claude Code settings: docs-local-files off outside your projects, and each project's settings (re)written."""
     edit_json(user_settings(), hide)
     for r in projects():
         if os.path.isdir(r):
@@ -201,9 +200,7 @@ def setup_shell(args):
     d = bin_dir()
     link = os.path.join(d, "docsync")
     os.makedirs(d, exist_ok=True)
-    if os.path.islink(link):
-        os.remove(link)  # 1.x: a link into the skill folder
-    elif os.path.exists(link) and SHIM_MARK not in read(link):
+    if os.path.lexists(link) and (os.path.islink(link) or SHIM_MARK not in read(link)):
         sys.exit(f"{link} exists and is not docsync; move it away, then run setup shell again")
     write(link, SHIM)
     os.chmod(link, 0o755)

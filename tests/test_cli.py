@@ -86,11 +86,15 @@ class Cli(Sandbox):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(self.run_ok("setup", "shell"))["link"], out["link"])  # its own file: rewritten
 
-    def test_setup_shell_keeps_a_foreign_file(self):
+    def test_setup_shell_keeps_a_foreign_file_or_link(self):
         self.write("bin/docsync", "#!/bin/sh\necho mine\n")
         r = self.run_cli("setup", "shell")
         self.assertEqual(r.returncode, 1)
         self.assertEqual(textio.read(self.path("bin/docsync")), "#!/bin/sh\necho mine\n")
+        os.remove(self.path("bin/docsync"))
+        os.symlink(self.path("nowhere"), self.path("bin/docsync"))
+        self.assertEqual(self.run_cli("setup", "shell").returncode, 1)
+        self.assertFalse(os.path.exists(self.path("nowhere")))
 
     def test_setup_claude_then_uninstall_restore_the_settings(self):
         g = self.path("claude/settings.json")

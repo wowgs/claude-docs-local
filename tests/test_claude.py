@@ -7,8 +7,6 @@ FOREIGN = {"permissions": {"deny": ["Bash(rm *)"]},
            "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "mine.sh"}]}]},
            "skillOverrides": {"other": "off"},
            "enabledPlugins": {"other@x": True}}
-LEGACY_HOOK = {"matcher": "mcp__claude_ai_Claude_Docs__create",
-               "hooks": [{"type": "command", "command": 'python3 "/u/.claude/skills/docs-local/scripts/docsync.py" hook'}]}
 
 
 class Settings(Sandbox):
@@ -20,17 +18,6 @@ class Settings(Sandbox):
         self.assertEqual(s["permissions"]["deny"], ["Bash(rm *)"] + c.DENY)
         self.assertEqual(s["hooks"], FOREIGN["hooks"])
         self.assertEqual(s["skillOverrides"], FOREIGN["skillOverrides"])
-
-    def test_lock_removes_what_1x_wrote(self):
-        s = json.loads(json.dumps(FOREIGN))
-        s["skillOverrides"]["docs-local"] = "on"
-        s["hooks"]["PreToolUse"].append(LEGACY_HOOK)
-        c.lock(s)
-        self.assertEqual(s["skillOverrides"], FOREIGN["skillOverrides"])
-        self.assertEqual(s["hooks"], FOREIGN["hooks"])
-        legacy = {"skillOverrides": {"docs-local": "on"}, "hooks": {"PreToolUse": [LEGACY_HOOK]}}
-        c.unlock(legacy)
-        self.assertEqual(legacy, {})
 
     def test_unlock_restores_exactly(self):
         s = json.loads(json.dumps(FOREIGN))
@@ -61,11 +48,9 @@ class Settings(Sandbox):
         self.assertEqual(textio.load_json(c.project_settings(root)), FOREIGN)
 
     def test_hide_and_unhide_globally(self):
-        s = {"model": "x", "skillOverrides": {"docs-local": "user-invocable-only"},
-             "extraKnownMarketplaces": {c.MARKET: {"source": {"source": "url", "url": "https://x"}}}}
+        s = {"model": "x", "extraKnownMarketplaces": {c.MARKET: {"source": {"source": "url", "url": "https://x"}}}}
         c.hide(s)
         self.assertEqual(s["enabledPlugins"], {c.FILES: False})
-        self.assertNotIn("skillOverrides", s)
         self.assertTrue(s["extraKnownMarketplaces"][c.MARKET]["autoUpdate"])
         c.unhide(s)
         self.assertNotIn("enabledPlugins", s)

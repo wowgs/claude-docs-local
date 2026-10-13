@@ -1,6 +1,11 @@
 # Changelog
 
-One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version) and its section has **Migration (for the model)**: what to change in the user's files during setup.
+One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
+
+## 2.0.2 — 2026-10-13
+
+- SETUP.md calls `<plugin folder>/bin/docsync` by its full path, one executable, until `/reload-plugins`.
+- Removed the 1.x migration (SETUP step and settings cleanup).
 
 ## 2.0.1 — 2026-10-13
 
@@ -15,9 +20,7 @@ Installed as two plugins from the `wowgs` marketplace instead of a git clone in 
 - Gone: `docsync update`, `VERSION`, setup writing into SKILL.md. `project check` returns the sync rule of the chosen mode.
 - The `docsync` shell command is a small script that runs the installed plugin's copy, since its path changes with every version.
 
-Config schema stays 1; the user config loses `"update"`.
-
-**Migration (for the model):** SETUP.md, "Install", step 2 deletes the 1.x folder, and `docsync setup claude` replaces what 1.x wrote into Claude Code's settings (the `skillOverrides` entry and the hook in each project).
+Config schema stays 1.
 
 ## 1.0.0 — 2026-10-13
 

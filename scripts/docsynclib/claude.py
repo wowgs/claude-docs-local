@@ -13,7 +13,6 @@ PLUGIN = "docs-local@" + MARKET
 FILES = "docs-local-files@" + MARKET
 DOCS_TOOL = "mcp__claude_ai_Claude_Docs__"
 DENY = [DOCS_TOOL + t for t in ("batch", "update", "delete")]
-LEGACY_SKILL = "docs-local"  # 1.x: a skill folder in ~/.claude/skills, shown or hidden with skillOverrides
 
 
 def edit_json(path, change):
@@ -37,26 +36,14 @@ def prune(s, *keys):
             del o[keys[n - 1]]
 
 
-def drop_legacy(s):
-    """What 1.x wrote: the skill override and the hook that pointed at the skill folder."""
-    s.get("skillOverrides", {}).pop(LEGACY_SKILL, None)
-    prune(s, "skillOverrides")
-    if "PreToolUse" in s.get("hooks", {}):
-        s["hooks"]["PreToolUse"] = [g for g in s["hooks"]["PreToolUse"] if not any(
-            "docsync.py" in h.get("command", "") and h.get("command", "").endswith(" hook") for h in g.get("hooks", []))]
-    prune(s, "hooks", "PreToolUse")
-
-
 def lock(s):
     """A project's settings: the files skill on, the Docs tools that write off."""
-    drop_legacy(s)
     s.setdefault("enabledPlugins", {})[FILES] = True
     deny = s.setdefault("permissions", {}).setdefault("deny", [])
     deny += [t for t in DENY if t not in deny]
 
 
 def unlock(s):
-    drop_legacy(s)
     s.get("enabledPlugins", {}).pop(FILES, None)
     prune(s, "enabledPlugins")
     if "deny" in s.get("permissions", {}):
@@ -66,7 +53,6 @@ def unlock(s):
 
 def hide(s):
     """User settings: the files skill off outside projects; the marketplace updates itself."""
-    drop_legacy(s)
     s.setdefault("enabledPlugins", {})[FILES] = False
     m = s.get("extraKnownMarketplaces", {}).get(MARKET)
     if m is not None:
@@ -74,7 +60,6 @@ def hide(s):
 
 
 def unhide(s):
-    drop_legacy(s)
     s.get("enabledPlugins", {}).pop(FILES, None)
     prune(s, "enabledPlugins")
 
