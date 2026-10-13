@@ -2,7 +2,7 @@
 
 Claude Code edits your claude.ai Docs as local markdown files. `docsync` syncs them back.
 
-Use it only for docs that you edit alone: a sync rewrites whole tabs, so other people's edits get overwritten.
+Use it only for docs that you edit alone: a sync rewrites whole tabs, so other people's edits end in conflicts.
 
 ## Install
 
