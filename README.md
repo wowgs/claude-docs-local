@@ -12,6 +12,20 @@ A sync or a push rewrites each changed tab whole. Comments on the replaced text 
 
 Works only with Docs artifacts. Diagrams and charts sync, images are not supported.
 
+## Install
+
+Paste into Claude Code:
+
+```
+Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json`, then follow the plugin's SETUP.md.
+```
+
+`/docs-local` turns a project on, `/docs-local remove` turns it off.
+
+Needs: claude.ai login in Claude Code, Claude Docs connector, git, Python 3.9+.
+
+Tested on macOS and Linux. Windows: best effort :)
+
 ## Why
 
 | Mean of 3 runs on a 111 KB doc with 8 tabs | Official Docs MCP | docs-local, Sync | docs-local, Push |
@@ -26,20 +40,6 @@ Works only with Docs artifacts. Diagrams and charts sync, images are not support
 | Correct results | 3 of 3 | 3 of 3 | 3 of 3 |
 
 [Benchmark](bench/README.md)
-
-## Install
-
-Paste into Claude Code:
-
-```
-Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json`, then follow the plugin's SETUP.md.
-```
-
-`/docs-local` turns a project on, `/docs-local remove` turns it off.
-
-Needs: claude.ai login in Claude Code, Claude Docs connector, git, Python 3.9+.
-
-Tested on macOS and Linux. Windows: best effort :)
 
 ## Use
 
