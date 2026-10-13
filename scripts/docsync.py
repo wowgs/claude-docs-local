@@ -502,6 +502,34 @@ def local_hash(d, base):
     return sha(md, bl)
 
 
+def words(base):
+    return re.sub(r"^\d+(?:\.\d+)*-", "", base)
+
+
+def adopt_renamed(d, st):
+    """Tab files renamed by hand: a tab whose .md is gone follows the one new .md with the same words
+    (or, failing that, the same text), so the rename is not taken for a deleted tab plus a new one."""
+    known = {t["base"] for t in st["tabs"].values()}
+    new = [f[:-3] for f in sorted(os.listdir(d)) if f.endswith(".md") and f[:-3] not in known]
+    for t in st["tabs"].values():
+        ob = t["base"]
+        if not new or os.path.exists(os.path.join(d, ob + ".md")):
+            continue
+        hits = [b for b in new if words(b) == words(ob)] or [b for b in new if local_hash(d, b) == t["hash"]]
+        if len(hits) != 1:
+            continue
+        nb = hits[0]
+        new.remove(nb)
+        for f in tab_files(d, ob):
+            dst = os.path.join(d, nb + os.path.basename(f)[len(ob):])
+            if os.path.exists(f) and not os.path.exists(dst):
+                os.replace(f, dst)
+        for info in t.get("widgets", {}).values():
+            info["file"] = nb + info["file"][len(ob):]
+        t["base"] = nb
+        ev("info", f"{d}/{nb}", f"files renamed from {ob}")
+
+
 def widget_files(d, base):
     pre = base + ".widget-"
     return sorted(f for f in os.listdir(d) if f.startswith(pre) and f.endswith(".jsx"))
@@ -834,6 +862,7 @@ def cmd_sync(args, mode="sync"):
                 call("update", {"ref": {"object": "project", "id": doc_id}, "payload": {"kind": "patch", "patch": [
                     {"op": "set", "path": ["name"], "value": want_name}]}})
                 ev("renamed", d, f"doc renamed (name from {args.config})")
+        adopt_renamed(d, st)
         seen = set()
         for tab_id, name, node in remote:
             seen.add(tab_id)
@@ -1278,18 +1307,12 @@ def remind_update():
 
 
 MODES = {
-    "user": ("Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs "
-             "artifact, or sets docs up for local work. Edit the local files only; the user syncs them with docsync.",
-             "The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` "
-             "and `update` commands: never sync, pull, push or status, and does not remind about syncing."),
-    "model": ("Work with claude.ai Docs as local markdown files. Use whenever a task reads or changes a Docs "
-              "artifact, or sets docs up for local work. Edit the local files; run docsync at the start of each request "
-              "that involves docs and after all its work is done.",
-              "Claude syncs: run `python3 <skill folder>/scripts/docsync.py` from the project at the start of each "
-              "user request that involves its docs (to get the user's changes in the doc), and once more after all "
-              "the work for that request is done. It prints JSON: `events`, `conflicts`, `update`. Exit code 2 = "
-              "conflicts: stop, say which tab and why, and resolve only as the user decides; 1 = error: show it as "
-              "is."),
+    "user": "The user syncs with the `docsync` command. Claude runs the script only for `project`, `doc`, `setup` "
+            "and `update` commands: never sync, pull, push or status, and does not remind about syncing.",
+    "model": "Claude syncs: run `python3 <skill folder>/scripts/docsync.py` from the project at the start of each "
+             "user request that involves its docs, and once more after all the work for that request is done. "
+             "It prints JSON: `events`, `conflicts`, `update`. Exit code 2 = conflicts: stop, say which tab and why, "
+             "and resolve only as the user decides; 1 = error: show it as is.",
 }
 
 
@@ -1303,9 +1326,8 @@ def setup_mode(args):
     save_user(u)
     path = os.path.join(SKILL_DIR, "SKILL.md")
     s = read_text(path) or ""
-    desc, para = MODES[mode]
-    new = re.sub(r"(?m)^description: .*$", lambda m: "description: " + desc, s, count=1)
-    new = re.sub(r"(## Syncing\n\n)(.+?)(\n\n|\Z)", lambda m: m.group(1) + para + m.group(3), new, count=1, flags=re.S)
+    para = MODES[mode]
+    new = re.sub(r"(## Syncing\n\n)(.+?)(\n\n|\Z)", lambda m: m.group(1) + para + m.group(3), s, count=1, flags=re.S)
     if new != s:
         open(path, "w").write(new)
     print(json.dumps({"mode": mode, "skill_md": "updated" if new != s else "unchanged"}))
