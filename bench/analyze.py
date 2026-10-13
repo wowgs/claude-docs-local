@@ -65,15 +65,16 @@ def mean(a, key):
     return statistics.mean(r[key] for r in by[a])
 
 
-ROWS = [  # label, unit, key, decimals, shown only when the variant has it
+ROWS = [  # label, unit, key, decimals, shown only when the variant has it; the first two are the headline, in bold
     ("Time until Claude answers", "s", "answer_s", 1, lambda a: True),
+    ("Cost", "$", "cost", 2, lambda a: True),
     ("Model steps that call a tool", "", "steps", 1, lambda a: True),
     ("— time in those steps", "s", "step_s", 1, lambda a: True),
     ("— time running the tools", "s", "tool_s", 1, lambda a: True),
     ("Sync at the end of the turn", "s", "stop_hook_s", 1, lambda a: mean(a, "stop_hook_s") > 2),
     ("Push in the background, after the answer", "s", "push_s", 1, lambda a: mean(a, "push_s") > 0),
-    ("Cost", "$", "cost", 2, lambda a: True),
 ]
+BOLD = {"answer_s", "cost"}
 
 
 def short(a, unit, key, d):
@@ -88,17 +89,17 @@ def ranged(a, unit, key, d):
 
 
 def table(head, cell, with_units):
-    out = [f"| {head} | " + " | ".join(name for _, name in cols) + " |", "|---|" + "---|" * len(cols)]
+    b = lambda x, key: f"**{x}**" if key in BOLD else x
+    out = [f"| {head} | " + " | ".join(name for _, name in cols) + " |", "|---|" + "---|" * len(cols),
+           "| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]
     for label, unit, key, d, has in ROWS:
         name = f"{label}, {unit}" if with_units and unit else label
-        out.append(f"| {name} | " + " | ".join(cell(a, unit, key, d) if has(a) else "—" for a, _ in cols) + " |")
+        out.append(f"| {b(name, key)} | " + " | ".join(b(cell(a, unit, key, d), key) if has(a) else "—" for a, _ in cols) + " |")
     return out
 
 
 print("\nREADME:")
-print("\n".join(table(f"Mean of {n} runs on {doc_size()}", short, False)
-                + ["| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]))
+print("\n".join(table(f"Mean of {n} runs on {doc_size()}", short, False)))
 print("\nbench/README.md:")
-print("\n".join(table(f"Mean (min–max) of {n} runs on {doc_size()}", ranged, True)
-                + ["| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]))
+print("\n".join(table(f"Mean (min–max) of {n} runs on {doc_size()}", ranged, True)))
 json.dump(runs, open(os.path.join(RES, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
