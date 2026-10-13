@@ -18,6 +18,8 @@ Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/mar
 
 Needs: claude.ai login in Claude Code, the Claude Docs connector, git, Python 3.9+.
 
+macOS and Linux. Windows: best effort, untested.
+
 ## Use
 
 ```
