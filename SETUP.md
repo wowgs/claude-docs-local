@@ -2,7 +2,7 @@
 
 For the model. Run after installing this skill and again after every update (`docsync update apply`). It keeps everything the user already chose and asks only for what is missing. Docs themselves are set up the first time a task uses them (SKILL.md, "Which projects").
 
-Requirements: Claude Code logged in with a claude.ai account, the Claude Docs connector on that account, Python 3.9 or newer (on macOS it comes with the Command Line Tools, like git). No packages to install. `<skill folder>` below is this skill's base directory; `python3` below means the Python command from SKILL.md (`python` where there is no `python3`).
+`<skill folder>` below is this skill's base directory.
 
 1. **Read the user config**: `~/.config/docsync/config.json` (`$XDG_CONFIG_HOME/docsync/` if set; `%APPDATA%\docsync\` on Windows). Missing = a first install.
 2. **Bring the config up to date.** This version uses config schema 1 (structure in CHANGELOG.md, newest section). If the user config, or the `docsync.json` of any project in its `"projects"`, has an older `"schema"` (or none but other keys), change them to the current structure, following the **Migration** notes in CHANGELOG.md for every version in between. Keep every value the user chose. Set `"schema"` to the current number. Tell the user in one line what you changed.
