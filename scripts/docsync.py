@@ -49,6 +49,12 @@ def status(action, tab=None):
         CTX["tab"] = tab
     if not TTY:
         return
+    if BUF is not None:  # a live project block: the action goes on the line of the doc (or project) being worked on
+        CTX["action"] = ((CTX["tab"] + " · ") if DOC and CTX["tab"] else "") + action
+        if DOC and DOC.get("idx") is not None:
+            BUF[DOC["idx"]] = doc_line()
+        redraw()
+        return
     where = [x for x in (CTX["project"], DOC and DOC["name"], DOC and CTX["tab"]) if x]
     plain = " › ".join(where) + (" · " if where else "") + action
     cols = shutil.get_terminal_size((100, 20)).columns
@@ -59,7 +65,47 @@ def status(action, tab=None):
     _live = True
 
 
-BUF = None  # when a list: lines are collected and printed later (under the project's header)
+BUF = None  # when a list: the lines of the current project's block, under its header
+BLOCK = {"shown": 0, "done": None}  # lines of the block now on screen; the project's summary once done
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def fit(line, cols):
+    """Cut a line to the terminal width, counting visible characters only."""
+    out, n, i = [], 0, 0
+    while i < len(line):
+        m = ANSI.match(line, i)
+        if m:
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        if n >= cols - 1:
+            out.append("…\x1b[0m")
+            break
+        out.append(line[i])
+        n += 1
+        i += 1
+    return "".join(out)
+
+
+def project_line():
+    head = paint("▸ " + (CTX["project"] or ""), "1")
+    if BLOCK["done"] is not None:
+        return head + BLOCK["done"]
+    return head + "  " + paint("… " + (CTX.get("action") or "working") if not DOC else "…", "2")
+
+
+def redraw():
+    """Redraw the live project block in place: the project line, then BUF."""
+    if not TTY or BUF is None:
+        return
+    cols = shutil.get_terminal_size((100, 20)).columns
+    lines = [project_line()] + BUF
+    out = ("\x1b[%dF" % BLOCK["shown"]) if BLOCK["shown"] else ""
+    out += "".join("\x1b[2K" + fit(l, cols) + "\n" for l in lines)
+    sys.stdout.write(out)
+    sys.stdout.flush()
+    BLOCK["shown"] = len(lines)
 
 
 def say(*a, kind=None):
@@ -67,6 +113,7 @@ def say(*a, kind=None):
     global _live
     if BUF is not None:
         BUF.append(" ".join(str(x) for x in a))
+        redraw()
         return
     if _live:
         sys.stdout.write("\r\x1b[2K")
@@ -94,21 +141,42 @@ DOC = None  # the doc being worked on: {"dir", "name", "shown", "checked"}
 def doc_begin(d, name):
     global DOC
     doc_end()
-    DOC = {"dir": d, "name": name or d, "shown": False, "checked": 0}
+    DOC = {"dir": d, "name": name or d, "shown": False, "checked": 0, "events": 0, "idx": None, "extra": ""}
     STATS["docs"] = STATS.get("docs", 0) + 1
+    CTX["action"] = None
+    if BUF is not None:  # in a project block the doc's line appears at once and shows what is being done
+        DOC["idx"] = len(BUF)
+        DOC["shown"] = True
+        BUF.append(doc_line())
+        redraw()
+
+
+def doc_line():
+    live = ("  " + paint("· " + CTX["action"], "2")) if CTX.get("action") and not DOC["extra"] else ""
+    return f"  {paint('◆', '1;34')} {paint(DOC['name'], '1')}{DOC['extra']}{live}"
 
 
 def doc_header(extra=""):
-    say(f"  {paint('◆', '1;34')} {paint(DOC['name'], '1')}{extra}")
+    DOC["extra"] = extra
+    if DOC.get("idx") is not None:
+        BUF[DOC["idx"]] = doc_line()
+        redraw()
+    else:
+        say(doc_line())
     DOC["shown"] = True
 
 
 def doc_end():
-    """A doc with nothing to report gets one line."""
+    """Finish the doc's line: '✓ in sync' when nothing happened to it."""
     global DOC
-    if DOC and not DOC["shown"]:
+    if DOC and (not DOC["shown"] or (DOC.get("idx") is not None and not DOC["events"])):
         doc_header("  " + paint("✓ in sync", "2"))
+    elif DOC and DOC.get("idx") is not None:
+        CTX["action"] = None
+        BUF[DOC["idx"]] = doc_line()
+        redraw()
     DOC = None
+    CTX["action"] = None
 
 
 def ev(kind, path, detail=""):
@@ -121,6 +189,7 @@ def ev(kind, path, detail=""):
     if DOC:
         if not DOC["shown"]:
             doc_header()
+        DOC["events"] += 1
         indent = "      "
         path = path[len(DOC["dir"]) + 1:] if path.startswith(DOC["dir"] + "/") else ("(the doc)" if path == DOC["dir"] else path)
     say(f"{indent}{paint(icon, color)} {paint(f'{verb:<9}', color)}{path:<36} {paint(detail, '2')}".rstrip())
@@ -1190,16 +1259,22 @@ def run_sync(args):
             print()
         STATS.clear()
         CTX["project"] = project_name(root)
+        CTX["action"] = None
+        BLOCK.update(shown=0, done=None)
         BUF = []
+        redraw()
         try:
             register(root)
             cmd_sync(args, args.cmd)
+            doc_end()
         finally:
+            BLOCK["done"] = "" if args.cmd == "status" else "  " + summary(STATS, "doc")
+            redraw()
             lines, BUF = BUF, None
-        head = paint("▸ " + CTX["project"], "1")
-        say(head + ("" if args.cmd == "status" else "  " + summary(STATS, "doc")))
-        for line in lines:
-            say(line)
+        if not TTY:
+            say(paint("▸ " + CTX["project"], "1") + BLOCK["done"])
+            for line in lines:
+                say(line)
         for k, v in STATS.items():
             total[k] = total.get(k, 0) + v
     if len(roots) > 1 and args.cmd != "status":
