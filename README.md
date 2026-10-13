@@ -11,6 +11,11 @@ Works only with Docs artifacts. Diagrams and charts sync, images are not support
 | Mean of 3 runs | Docs tools | docs-local, Sync | docs-local, Push |
 |---|---|---|---|
 | Time until Claude answers | 80.8 s | 42.0 s | 26.4 s |
+| Model steps that call a tool | 22.3 | 6.0 | 5.7 |
+| — time in those steps | 70.7 s | 24.8 s | 22.9 s |
+| — time running the tools | 6.4 s | 0.6 s | 0.5 s |
+| Sync at the end of the turn | — | 14.2 s | — |
+| Push in the background, after the answer | — | — | 12.7 s |
 | Cost | $0.81 | $0.32 | $0.32 |
 
 [Benchmark](bench/README.md)

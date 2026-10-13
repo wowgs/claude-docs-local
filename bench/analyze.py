@@ -57,19 +57,39 @@ def mean(a, key):
     return statistics.mean(r[key] for r in by[a])
 
 
-lines = [
-    ("Time until Claude answers", lambda a: f"{mean(a, 'answer_s'):.1f} s"),
-    ("Model steps that call a tool", lambda a: f"{mean(a, 'steps'):.1f}"),
-    ("Time in those steps", lambda a: f"{mean(a, 'step_s'):.1f} s"),
-    ("Time running the tools", lambda a: f"{mean(a, 'tool_s'):.1f} s"),
-    ("Sync before Claude answers", lambda a: f"{mean(a, 'stop_hook_s'):.1f} s" if mean(a, "stop_hook_s") > 2 else "—"),
-    ("Push after Claude answers", lambda a: f"{mean(a, 'push_s'):.1f} s" if mean(a, "push_s") > 0 else "—"),
-    ("Cost", lambda a: f"${mean(a, 'cost'):.2f}"),
-    ("Correct results", lambda a: f"{sum(r['pass'] for r in by[a])} of {len(by[a])}"),
+ROWS = [  # label, unit, key, decimals, shown only when the variant has it
+    ("Time until Claude answers", "s", "answer_s", 1, lambda a: True),
+    ("Model steps that call a tool", "", "steps", 1, lambda a: True),
+    ("— time in those steps", "s", "step_s", 1, lambda a: True),
+    ("— time running the tools", "s", "tool_s", 1, lambda a: True),
+    ("Sync at the end of the turn", "s", "stop_hook_s", 1, lambda a: mean(a, "stop_hook_s") > 2),
+    ("Push in the background, after the answer", "s", "push_s", 1, lambda a: mean(a, "push_s") > 0),
+    ("Cost", "$", "cost", 2, lambda a: True),
 ]
-print()
-print(f"| Mean of {n} runs | " + " | ".join(name for _, name in cols) + " |")
-print("|---|" + "---|" * len(cols))
-for label, f in lines:
-    print(f"| {label} | " + " | ".join(f(a) for a, _ in cols) + " |")
+
+
+def short(a, unit, key, d):
+    v = f"{mean(a, key):.{d}f}"
+    return f"${v}" if unit == "$" else f"{v} {unit}".strip()
+
+
+def ranged(a, unit, key, d):
+    v = [r[key] for r in by[a]]
+    lo_hi = f"{min(v):.0f}–{max(v):.0f}" if key == "steps" else f"{min(v):.{d}f}–{max(v):.{d}f}"
+    return f"{statistics.mean(v):.{d}f} ({lo_hi})"
+
+
+def table(head, cell, with_units):
+    out = [f"| {head} | " + " | ".join(name for _, name in cols) + " |", "|---|" + "---|" * len(cols)]
+    for label, unit, key, d, has in ROWS:
+        name = f"{label}, {unit}" if with_units and unit else label
+        out.append(f"| {name} | " + " | ".join(cell(a, unit, key, d) if has(a) else "—" for a, _ in cols) + " |")
+    return out
+
+
+print("\nREADME:")
+print("\n".join(table(f"Mean of {n} runs", short, False)))
+print("\nbench/README.md:")
+print("\n".join(table(f"Mean (min–max) of {n} runs", ranged, True)
+                + ["| Correct results | " + " | ".join(f"{sum(r['pass'] for r in by[a])} of {len(by[a])}" for a, _ in cols) + " |"]))
 json.dump(runs, open(os.path.join(RES, "summary.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
