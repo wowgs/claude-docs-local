@@ -140,6 +140,29 @@ class Compare(unittest.TestCase):
         self.assertTrue(m.same("\na  \n\n\n\nb\n\n", {}, "a\n\nb", {}))
         self.assertFalse(m.same("a\nb", {}, "a\n\nb", {}))
 
+    def test_same_soft_line_breaks(self):
+        # the doc stores a paragraph with soft line breaks as one line
+        self.assertTrue(m.same("One.\nTwo.\nThree.\n", {}, "One. Two. Three.\n", {}))
+        self.assertTrue(m.same("- a\n  b\n- c\n", {}, "- a b\n- c\n", {}))
+        self.assertTrue(m.same("> a\nb\n", {}, "> a b\n", {}))
+        # these line breaks are not soft
+        self.assertFalse(m.same("a\\\nb\n", {}, "a b\n", {}))
+        self.assertFalse(m.same("# T\ntext\n", {}, "# T text\n", {}))
+        self.assertFalse(m.same("```\na\nb\n```\n", {}, "```\na b\n```\n", {}))
+        self.assertFalse(m.same("| A |\n| --- |\n| x |\n", {}, "| A | | --- | | x |\n", {}))
+        self.assertFalse(m.same("- a\n- b\n", {}, "- a - b\n", {}))
+        self.assertFalse(m.same("1. a\n2. b\n", {}, "1. a 2. b\n", {}))
+        self.assertFalse(m.same("<?claude block c1?>\ntext\n", {}, "<?claude block c1?> text\n", {}))
+
+    def test_same_in_word_underscore(self):
+        # the doc writes an in-word underscore back escaped
+        self.assertTrue(m.same("X_C and X_L\n", {}, "X\\_C and X\\_L\n", {}))
+        self.assertTrue(m.same("| X_C |\n| --- |\n", {}, "| X\\_C |\n| --- |\n", {}))
+        # not the same text: a code span keeps its backslash, and _x_ is emphasis
+        self.assertFalse(m.same("`X_C`\n", {}, "`X\\_C`\n", {}))
+        self.assertFalse(m.same("_x_\n", {}, "\\_x\\_\n", {}))
+        self.assertFalse(m.same("```\nX_C\n```\n", {}, "```\nX\\_C\n```\n", {}))
+
     def test_doc_hash_ignores_formatting_attributes(self):
         self.assertEqual(m.doc_hash(DOC), m.doc_hash(DOC.replace(" width='3'", " width='9'")))
         self.assertNotEqual(m.doc_hash(DOC), m.doc_hash(DOC.replace(">z<", ">w<")))

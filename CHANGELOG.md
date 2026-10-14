@@ -2,6 +2,10 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.5.4 — 2026-10-14
+
+- The check after a push no longer reports "the doc DIFFERS" for two kinds of text that the doc stores in another form with the same content. A paragraph with line breaks inside it: the doc joins its lines into one. An underscore between two letters outside code (`X_C`): the doc writes it back as `X\_C`. The diff that a real difference prints compares the same way.
+
 ## 2.5.3 — 2026-10-13
 
 - No hook on Bash calls any more. It denied every command that named `docsync` other than `project`, `doc`, `setup` and help: also a `grep` for the word, a path to the script, and a command run in another folder from a project's session. The skill never names the sync commands, so Claude has no reason to run them.

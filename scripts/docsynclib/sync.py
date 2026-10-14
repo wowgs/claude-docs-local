@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import output as out
 from .files import (TRASH, adopt_renamed, base_for, load_state, local_changed, local_hash, local_tab,
                     move_tab_files, read_text, save_state, slug, tab_files, to_trash)
-from .markdown import (check_pushable, chunks, doc_hash, full_ids, h1, md_source, norm, render, same, sha,
+from .markdown import (check_pushable, chunks, compare_lines, doc_hash, full_ids, h1, md_source, same, sha,
                        to_markdown, top_ids)
 from .mcp import C, call, find_key, read_node
 from .projects import entry, load_cfg, save_cfg, set_cfg_id
@@ -188,7 +188,7 @@ def push_tab(d, st, doc_id, t, data, tab_id, new=False):
     kind, what = ("created", "new tab · ") if new else ("pushed", "")
     out.ev(kind if ok else "warn", f"{d}/{base}", f"{what}rev {after['rev']} · " + ("verified" if ok else "written, but the doc DIFFERS:"))
     if not ok:
-        out.say("\n".join(difflib.unified_diff(norm(render(md, blocks)), norm(render(back, back_blocks)),
+        out.say("\n".join(difflib.unified_diff(compare_lines(md, blocks), compare_lines(back, back_blocks),
                                                  "local", "doc", lineterm="", n=0)))
 
 
