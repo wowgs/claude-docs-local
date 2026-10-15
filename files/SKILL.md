@@ -1,6 +1,6 @@
 ---
 name: docs-local
-description: This project's claude.ai Docs are local markdown files. Read and edit those, never the doc through the Docs tools. Load this skill before you read or change a Docs artifact here. When you change code, update the docs here that describe it, in the same task.
+description: This project's claude.ai Docs are local markdown files. Read and edit those, never the doc through the Docs tools. Load this skill before you read or change a Docs artifact here, and before you make a new doc, tab or diagram. When you change code, update the docs here that describe it, in the same task.
 user-invocable: false
 ---
 
@@ -9,6 +9,22 @@ user-invocable: false
 `docsync.json` in the project root is the manifest. It lists each doc with its key, id, name, folder for new tabs (`dir`) and tabs, each tab with its file. A doc the task needs that is not local yet: `docsync doc add <link>`, without asking. Its output asks you to open the doc once with the Artifact tool; do that.
 
 The Docs tools write only comments here. Make the edit that a comment asks for in the files, as "Comments" below says.
+
+## Where things are
+
+A doc's key is its key in `docsync.json`; `docsync doc add` and `docsync doc import` print it.
+
+| What | Where |
+| --- | --- |
+| a tab | its `.md` file, at the path in `docsync.json` |
+| a new tab | `<doc's dir>/<number>-<words>.md`, with `# <tab name>` as its first line |
+| the chips of a tab | `.docsync/<doc key>/<tab>.blocks.json` (`<tab>` = the tab file's name without `.md`) |
+| a diagram of a tab | its code in `.docsync/<doc key>/<tab>.widget-<id>.jsx`; in the md, its picture line |
+| a new diagram | its code in `.docsync/<doc key>/<tab>.widget-new-<name>.jsx`, its chip in that tab's `blocks.json`, its placeholder in the md |
+| a new doc | its tab files first, by default in `docs/<doc name as a slug>/`; then `docsync doc import`; then its diagrams |
+| docsync's own | `docsync.json`, `.docsync/state.json`, `.docsync/push.json`, `*.png`: do not edit |
+
+docsync does not move your files: a file stays where you put it. A new diagram needs its doc's key, so a doc gets its diagrams after `docsync doc import` has made it.
 
 ## Files
 
@@ -31,7 +47,7 @@ Only docsync writes `docsync.json`; use these commands for it.
 - **Tab under another tab:** `docsync tab parent <file> <parent tab file>`; without the parent, it moves to the top.
 - **Rename a tab:** edit its `# heading`.
 - **Delete a tab:** delete its file.
-- **New doc:** write its tab files, then `docsync doc import --name "<doc name>" <files, the main tab first>`. It makes the doc at once.
+- **New doc:** write its tab files with their text, then `docsync doc import --name "<doc name>" <files, the main tab first>`. It makes the doc at once and prints its key. Then add its diagrams as for any doc: the code and chips in `.docsync/<that key>/`, and the next sync makes them.
 - **Rename a doc:** `docsync doc rename <doc key> "<name>"`.
 - **Project name:** `docsync project name "<name>"`.
 

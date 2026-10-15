@@ -101,5 +101,6 @@ def cmd_import(args):
     out.say(out.summary(out.STATS, "doc"))
     doc_id = manifest.load(CONFIG)["docs"].get(key, {}).get("id")
     if doc_id:
+        out.say(f"Doc key: {key}; its tabs' chips, diagram code and pictures go in .docsync/{key}/.")
         out.say(f"Claude: open the doc once with the Artifact tool, action \"open\", url {ARTIFACT + doc_id}, so it "
                 "shows in this session's Outputs.")
