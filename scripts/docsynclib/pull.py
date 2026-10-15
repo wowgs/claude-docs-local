@@ -2,8 +2,8 @@
 import json, os
 
 from . import mcp, output as out
-from .files import (FMT, base, base_for, blocks_path, local_hash, own_files, posix, preview_path, read_text,
-                    to_trash, widget_path, move_tab_files)
+from .files import (FMT, TRASH, base, base_for, blocks_path, keep_copy, local_changed, local_hash, own_files, posix,
+                    preview_path, read_text, tab_files, to_trash, widget_path, move_tab_files)
 from .textio import write
 from .widgets import fetch_preview, read_widget
 from docmodel.compare import doc_hash, h1, sha
@@ -61,13 +61,18 @@ def pull_tab(P, key, e, tab_id, name, node, data=None):
     if known and known.get("name") != name:
         follow_rename(P, key, e, name)
     out.status("pulling", e["file"])
+    kept = None
+    if os.path.exists(e["file"]) and (not known or local_changed(key, e["file"], known)):
+        for f in tab_files(key, e["file"]):  # local edits the doc's version replaces: a copy in the trash
+            keep_copy(f)
+        kept = os.path.join(TRASH, e["file"])
     data = data or mcp.read_node(P.doc(key)["id"], node)
     widgets = write_tab(P, key, e["file"], data["xml"], P.doc(key)["id"])
     dst["tabs"][tab_id] = {"name": name, "node": node, "rev": data["rev"], "hash": local_hash(key, e["file"]),
                            "widgets": widgets, "h1": h1(read_text(e["file"])), "dhash": doc_hash(data["xml"]),
                            "fmt": FMT, **({"parent": known["parent"]} if known and known.get("parent") else {})}
     P.save()
-    out.ev("pulled", e["file"], f"rev {data['rev']}")
+    out.ev("pulled", e["file"], f"rev {data['rev']}" + (f" · local edits kept in {kept}" if kept else ""))
 
 
 def refresh(P, key, e, t):

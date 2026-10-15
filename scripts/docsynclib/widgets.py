@@ -3,7 +3,7 @@ picture of each, drawn by the doc (a screenshot read), that the tab file shows i
 import json, os, sys
 
 from . import mcp, output as out
-from .files import blocks_path, new_widget_path, preview_path, read_text, widget_path
+from .files import blocks_path, keep_copy, new_widget_path, preview_path, read_text, widget_path
 from .mcp import C
 from .textio import write
 from docmodel.compare import sha
@@ -104,6 +104,8 @@ def sync_widgets(P, key, e, doc_id, t, mode, force, fetched=None):
             push_widget(key, file, doc_id, info, wid, v.get("pub"))
             out.ev("pushed", label, f"diagram · publish {info['pub']}")
         elif rem and mode in ("sync", "pull"):
+            if loc:
+                keep_copy(path)  # local edits the doc's code replaces: a copy in the trash
             write(path, v["code"])
             info.update(pub=v.get("pub"), hash=sha(v["code"]))
             fetch_preview(doc_id, wid, preview_path(key, file, wid))

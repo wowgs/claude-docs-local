@@ -520,3 +520,15 @@ class StopHook(Base):
         from docsynclib import projects
         self.mode("model")
         self.assertEqual(projects.load_user()["sync"], "auto")
+
+
+class NothingLost(Base):
+    def test_a_forced_pull_keeps_the_local_edits_in_the_trash(self):
+        self.run_sync()
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nmine\n")
+        self.fake.edit("t1", "# 1 Intro\n\ntheirs")
+        self.args.force = True
+        self.run_sync("pull")
+        self.assertEqual(self.local(), "# 1 Intro\n\ntheirs\n")
+        self.assertEqual(textio.read(os.path.join(files.TRASH, "docs/d/1-intro.md")), "# 1 Intro\n\nmine\n")
+        self.assertIn("local edits kept in", output.EVENTS[-1]["detail"])

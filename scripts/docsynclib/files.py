@@ -1,7 +1,7 @@
 """Where a project's files are: tab files at the paths of the manifest; docsync's own files under .docsync/ (the
 chips, diagram code and pictures of each tab in .docsync/<doc key>/, the sync state, the background push); the
 trash. Paths are relative to the project root, which is the working folder."""
-import datetime, json, os, re
+import datetime, json, os, re, shutil
 
 from . import output as out
 from docmodel.compare import sha
@@ -111,6 +111,15 @@ def move_tab_files(key, old, new):
         dst = os.path.join(os.path.dirname(f), nb + os.path.basename(f)[len(ob):])
         if not os.path.exists(dst):
             os.replace(f, dst)
+
+
+def keep_copy(path):
+    """A copy of a local file in the trash, before docsync writes over it. Returns the copy's path."""
+    if os.path.exists(path):
+        dst = os.path.join(TRASH, path)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(path, dst)
+        return dst
 
 
 def to_trash(path):

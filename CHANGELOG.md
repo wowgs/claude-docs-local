@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 3.0.1 — 2026-10-15
+
+- A pull no longer loses local edits. When it writes the doc's version over a tab file that has edits not yet sent (`pull --force`, `sync --force` on a tab changed on both sides, a file of the manifest that this machine has never synced), the local file, its chips and its diagram code first go to the trash, `.docsync-trash/<time>/`, and the result line says so. The same holds for a diagram's code. Before, the edits were written over and lost.
+- Checked on 2026-10-15 with the fake server: `sync --force` on a tab changed in the file and in the doc wrote the doc's version and kept nothing; now a test checks that `pull --force` keeps the local file in the trash.
+
 ## 3.0.0 — 2026-10-15
 
 Breaking: the structure of `docsync.json` and of the user config changes. docsync moves a project of 2.x to the new structure the first time it reads it; nothing to do by hand. In a project that several people sync, everyone needs 3.0: docsync 2.x does not read the new `docsync.json`.
