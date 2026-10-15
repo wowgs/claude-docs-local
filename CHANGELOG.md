@@ -2,6 +2,13 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.5 — 2026-10-15
+
+- In a Claude Code session, docsync now calls the Claude Docs connector through that session, with no login of its own. This works in the desktop app, which does not refresh the login that docsync used before. When a session starts, a hooks module of the plugin (`hooks/bridge.ts`) starts `docsync bridge`. That broker listens on a Unix socket, and the module sets `DOCSYNC_BRIDGE` to its path. Every command and hook of the session inherits it. The module takes each tool call from the broker and runs it with the session's own connection (`$.mcp.call`).
+- Without the bridge, docsync works as before. That is the case for a run outside a Claude Code session, without the `docsync` command, or without the Claude Docs connector in the session. Then docsync uses Claude Code's stored login, refreshed as in 2.6.4.
+- A call that the session may have run but whose result was lost ends the run with an error. docsync does not send it again with its own login, so a write is never sent twice.
+- Checked on 2026-10-15. In a terminal session (`claude -p`, Claude Code 2.1.300) and in this desktop app session (Claude Code 2.1.295), a doc was read through the bridge while docsync's own login was turned off. A Stop hook got `DOCSYNC_BRIDGE`. In the desktop session, 16 reads ran 8 at a time in 1.3 s, and a write to a test doc went through.
+
 ## 2.6.4 — 2026-10-15
 
 - docsync no longer stops with HTTP 401 when Claude Code's stored login has expired. docsync reads the login that the `claude` command keeps in the Keychain (or in `.credentials.json`). Only the `claude` command refreshes that login. Claude Code in the desktop app takes its login from the app, so the stored login can expire after about 8 hours.

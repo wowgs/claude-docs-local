@@ -2,6 +2,7 @@
 import hashlib, json, os, platform, shutil, subprocess, sys, tempfile, threading, time, unicodedata, urllib.error
 import urllib.request, uuid
 
+from . import bridge
 from .textio import read
 
 SERVER_NAME = "Claude Docs"
@@ -141,19 +142,24 @@ def server_url():
 
 
 def call(tool, args, soft=False):
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                       "params": {"name": tool, "arguments": args}}).encode()
-    raw, ctype = http(server_url(), body, {"Content-Type": "application/json",
-                                           "Accept": "application/json, text/event-stream",
-                                           "MCP-Protocol-Version": "2025-06-18",
-                                           "X-Mcp-Client-Session-Id": SESSION})
-    if "text/event-stream" in ctype:
-        data = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")]
-        raw = data[-1]
-    r = json.loads(raw)
-    if "error" in r:
-        sys.exit(f"{tool}: {r['error']}")
-    text = "".join(c.get("text", "") for c in r["result"].get("content", []))
+    """One tool call of the Claude Docs connector: through the bridge of the Claude Code session that runs docsync
+    (bridge.py), else with Claude Code's stored login."""
+    result = bridge.call(tool, args)
+    if result is None:
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": {"name": tool, "arguments": args}}).encode()
+        raw, ctype = http(server_url(), body, {"Content-Type": "application/json",
+                                               "Accept": "application/json, text/event-stream",
+                                               "MCP-Protocol-Version": "2025-06-18",
+                                               "X-Mcp-Client-Session-Id": SESSION})
+        if "text/event-stream" in ctype:
+            data = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")]
+            raw = data[-1]
+        r = json.loads(raw)
+        if "error" in r:
+            sys.exit(f"{tool}: {r['error']}")
+        result = r["result"]
+    text = "".join(c.get("text", "") for c in result.get("content", []))
     i = text.find('{"verdict"')
     out = json.JSONDecoder().raw_decode(text[i:])[0] if i >= 0 else {"verdict": "?", "raw": text}
     if out.get("verdict") != "allow":

@@ -22,7 +22,9 @@ Your settings and projects: ~/.config/docsync/config.json ($XDG_CONFIG_HOME, %AP
 Claude Code: plugins docs-local and docs-local-files from the wowgs marketplace; docs-local-files is off in
 ~/.claude/settings.json and on in each project's .claude/settings.local.json, which also turns off the Docs tools
 that write, except comments. Claude Code updates the plugins (claude plugin update).
-Login: Claude Code's claude.ai login, read on each run and never stored.
+Login: none of its own. Run in a Claude Code session, docsync calls the Claude Docs connector through that session
+(the plugin's hooks module starts `docsync bridge` and sets DOCSYNC_BRIDGE); elsewhere it uses Claude Code's stored
+claude.ai login, read on each run and never stored by docsync.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
 Sync modes: "user" (you run docsync), "auto" (a hook syncs when Claude finishes a turn, and stops on conflicts),
 "auto-force" (a hook pushes in the background when Claude finishes a turn; the local files overwrite the doc).
@@ -31,7 +33,7 @@ Exit codes: 0 done, 1 error, 2 conflicts.
 """
 import argparse, json, os, platform, re, shutil, sys
 
-from . import output as out
+from . import bridge, output as out
 from .claude import (FILES, PLUGIN, edit_json, hide, installed, lock, project_settings, turn_off,
                      turn_on, unhide, unlock, user_settings)
 from .files import slug
@@ -325,6 +327,7 @@ def parser():
     sub.add_parser("hook", help="for Claude Code: the hooks on the Docs create tool and on Stop")
     sub.add_parser("hook-wake", help="for Claude Code: the Stop hook of mode auto-force, run in the background")
     sub.add_parser("push-background", help="for the auto-force hook: push --force, result in .docsync-last.json")
+    sub.add_parser("bridge", help="for the plugin's hooks module: the broker to the session's Claude Docs connector")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     return p
 
@@ -336,6 +339,7 @@ COMMANDS = {
     "hook": {None: hook},
     "hook-wake": {None: hook_wake},
     "push-background": {None: push_background},
+    "bridge": {None: lambda args: bridge.serve()},
     "uninstall": {None: uninstall},
 }
 
