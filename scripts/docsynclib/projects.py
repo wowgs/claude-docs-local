@@ -1,10 +1,12 @@
-"""The user config, the only list of projects, and each project's docsync.json."""
+"""The user config: the only list of projects, the default sync mode and each project's own mode.
+
+{"schema": 2, "sync": "user" | "auto" | "auto-force", "projects": {"<project root>": {"sync": "<its own mode>"}}}"""
 import json, os, platform
 
+from .manifest import CONFIG
 from .textio import load_json, write
 
-CONFIG = "docsync.json"
-SCHEMA = 1  # structure of the user config and of docsync.json; a change is a breaking update (CHANGELOG.md)
+SCHEMA = 2  # a change is a breaking update (CHANGELOG.md); docsync moves an older config to it when it reads it
 
 
 def user_config():
@@ -16,20 +18,26 @@ def user_config():
 
 
 def load_user():
-    """{"sync": "user" | "model", "projects": [...]}; migrates the older projects.json."""
+    """The user config, moved to schema 2 when it is older: 2.x keeps the projects as a list, 2.2 and older in
+    projects.json with mode "model"."""
     p = user_config()
     if os.path.exists(p):
         u = load_json(p)
-        if u.get("sync") == "model":  # 2.2 and older: Claude ran the sync; now a hook does it at the end of a turn
-            u["sync"] = "auto"
-        return u
-    old = os.path.join(os.path.dirname(p), "projects.json")
-    if os.path.exists(old):
+    else:
+        old = os.path.join(os.path.dirname(p), "projects.json")
+        if not os.path.exists(old):
+            return {}
         u = load_json(old)
-        write(p, json.dumps(u, ensure_ascii=False, indent=1))
         os.replace(old, old + ".migrated")
-        return u
-    return {}
+    if u.get("sync") == "model":  # 2.2 and older: Claude ran the sync; now a hook does it at the end of a turn
+        u["sync"] = "auto"
+    if isinstance(u.get("projects"), list):
+        u["projects"] = {r: {} for r in u["projects"]}
+    if u.get("schema", 1) < SCHEMA:
+        u["schema"] = SCHEMA
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        write(p, json.dumps(u, ensure_ascii=False, indent=1))
+    return u
 
 
 def save_user(u):
@@ -40,21 +48,38 @@ def save_user(u):
 
 
 def projects():
-    return load_user().get("projects", [])
+    return list(load_user().get("projects", {}))
+
+
+def mode_of(root):
+    """The project's sync mode: its own, else the default one."""
+    u = load_user()
+    return (u.get("projects", {}).get(root) or {}).get("sync") or u.get("sync")
+
+
+def set_mode(root, mode):
+    """The project's own mode; None: the default one."""
+    u = load_user()
+    p = u.setdefault("projects", {}).setdefault(os.path.realpath(root), {})
+    if mode:
+        p["sync"] = mode
+    else:
+        p.pop("sync", None)
+    save_user(u)
 
 
 def register(root):
     """Add a project root to the user config."""
     root = os.path.realpath(root)
     u = load_user()
-    if root not in u.get("projects", []):
-        u["projects"] = u.get("projects", []) + [root]
+    if root not in u.get("projects", {}):
+        u.setdefault("projects", {})[root] = {}
         save_user(u)
 
 
 def unregister(root):
     u = load_user()
-    u["projects"] = [r for r in u.get("projects", []) if r != root]
+    u.get("projects", {}).pop(root, None)
     save_user(u)
 
 
@@ -92,25 +117,3 @@ def project_name(root):
     except (OSError, ValueError):
         n = None
     return n or os.path.basename(root.rstrip(os.sep)) or root
-
-
-def entry(v):
-    """docsync.json value: "<doc id>" | null | {"id": "<doc id>" | null, "name": "<doc name>"}."""
-    return (v.get("id"), v.get("name")) if isinstance(v, dict) else (v, None)
-
-
-def load_cfg(path=CONFIG):
-    return load_json(path)
-
-
-def save_cfg(cfg, path=CONFIG):
-    write(path, json.dumps(cfg, ensure_ascii=False, indent=1) + "\n")
-
-
-def set_cfg_id(path, d, doc_id):
-    cfg = load_cfg(path)
-    if isinstance(cfg["docs"].get(d), dict):
-        cfg["docs"][d]["id"] = doc_id
-    else:
-        cfg["docs"][d] = doc_id
-    save_cfg(cfg, path)

@@ -1,35 +1,41 @@
 ---
 name: docs-local
-description: This project's claude.ai Docs are local markdown files. Read and edit those, never the doc through the Docs tools. Load this skill before you read or change a Docs artifact here.
+description: This project's claude.ai Docs are local markdown files. Read and edit those, never the doc through the Docs tools. Load this skill before you read or change a Docs artifact here. When you change code, update the docs here that describe it, in the same task.
 user-invocable: false
 ---
 
 # Docs as local files
 
-`docsync.json` in the project root lists the local docs: each folder with its doc id. A doc the task needs that is not local yet: `docsync doc add <link>`, without asking.
+`docsync.json` in the project root is the manifest. It lists each doc with its key, id, name, folder for new tabs (`dir`) and tabs, each tab with its file. A doc the task needs that is not local yet: `docsync doc add <link>`, without asking. Its output asks you to open the doc once with the Artifact tool; do that.
 
 The Docs tools write only comments here. Make the edit that a comment asks for in the files, as "Comments" below says.
 
 ## Files
 
-Each doc is a folder:
-
-- `<tab>.md` — the tab text. Markdown that round-trips: headings, paragraphs, `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, `[link](url)`, a line break as `\` at the end of the line, lists (`-`, `1.` or any start number, `- [ ]`; nested items indented 4 spaces), `> ` quotes, fenced code blocks with a language, `---`, pipe tables with a header row (one paragraph per cell: a `<br>` in a cell stops the push). Literal `* _ [ ] < > # | \` and backticks are backslash-escaped.
-- `<tab>.blocks.json` — chips used as `<?claude block KEY?>` in the md: `{"type":"mention","ref":"file/<tab id>","label":"…"}` (a tab), `{"type":"mention","ref":"project/<doc id>","label":"…"}` (another doc), `{"type":"mention","user":"me"}`, `{"type":"date","value":"YYYY-MM-DD"}`, `{"type":"dropdown","enum":"<enum id>","index":N}` (an option of a list the doc already has), `{"type":"embed","ref":"node/<widget id>","caption":"…"}` (alone on its line). A new chip = a new key in the json + the placeholder in the md.
-- `<tab>.widget-<id>.jsx` — the code of a diagram or chart embedded in that tab; edit it to change the diagram.
-- **New diagram or chart:** its code in `<tab>.widget-new-<name>.jsx` and a chip `{"type":"embed","ref":"node/new-<name>","caption":"…"}` in that tab; the sync makes it in the doc and renames the file to its id. Write the code as the Docs `guide` topics `topic.diagram` and `topic.charts` say.
-- **Images are not supported:** an image already in the doc stays as `![alt](blob/<id>)`; don't add or change one.
+- **A tab is a markdown file** at the path that `docsync.json` gives it. It can be anywhere in the project, for example `README.md`. Markdown that round-trips: headings, paragraphs, `**bold**`, `*italic*`, `~~strike~~`, `<u>underline</u>`, `<mark>highlight</mark>`, `` `code` ``, `[link](url)`, a line break as `\` at the end of the line, lists (`-`, `1.` or any start number, `- [ ]`; nested items indented 4 spaces), `> ` quotes, fenced code blocks with a language, `---`, pipe tables with a header row (one paragraph per cell: a `<br>` in a cell stops the push). Literal `* _ [ ] < > # | \` and backticks are backslash-escaped.
+- **A line `<!-- docsync {…} -->` right above a table or a diagram** holds what markdown cannot say. Keep it with its block, and edit it to change those things. For a table: `"header": false` (no header row), `"widths"` (column widths in px, `null` for automatic), `"align"` (cells aligned other than their column, by `"row,column"` from 0), `"spans"` (merged cells, `"row,column": [columns, rows]`; the cells that a merged cell covers stay empty in the table). For a diagram: `"width"` and `"align"`.
+- **A diagram shows as its picture:** `![<caption>](<path of its .png> "claude block <key>")`, alone on its line. Edit the text in the brackets to change the caption. Leave the rest of the line as it is.
+- **A link to another tab file of the project** is a mention of that tab in the doc: `[text](<relative path>.md)`. With the title `"doc"`, `[text](<path>.md "doc")`, it mentions that tab's doc. Write such a link to mention a tab.
+- **Each tab's own files are in `.docsync/<doc key>/`**, named by the tab file's name without `.md`. The doc key is the doc's key in `docsync.json`.
+    - `<tab>.blocks.json` — the chips that the md uses as `<?claude block KEY?>`: `{"type":"mention","ref":"file/<tab id>","label":"…"}` (a tab without a local file), `{"type":"mention","ref":"project/<doc id>","label":"…"}` (another doc), `{"type":"mention","user":"me"}`, `{"type":"date","value":"YYYY-MM-DD"}`, `{"type":"dropdown","enum":"<enum id>","index":N}` (an option of a list the doc already has), `{"type":"embed","ref":"node/<widget id>","caption":"…"}` (a diagram). A new chip = a new key in the json + the placeholder in the md.
+    - `<tab>.widget-<id>.jsx` — the code of a diagram or chart in that tab. Edit it to change the diagram.
+    - `<tab>.widget-<id>.png` — the picture that the doc draws of it. docsync writes it; do not edit it.
+- **New diagram or chart:** its code in `.docsync/<doc key>/<tab>.widget-new-<name>.jsx`, a chip `{"type":"embed","ref":"node/new-<name>","caption":"…"}` in that tab's `blocks.json`, and its placeholder alone on its line in the md. The sync makes it in the doc, renames the file to its id and puts its picture in the md. Write the code as the Docs `guide` topics `topic.diagram` and `topic.charts` say.
+- **Images are not supported:** an image already in the doc stays as `![alt](blob/<id>)`; do not add or change one.
 
 ## Structure changes
 
-- **New tab:** a new `<tab>.md` whose first line is `# <tab name>`. It can carry new diagrams, not ones of other tabs.
-- **Rename a tab:** edit its `# heading`.
-- **Delete a tab:** delete its `.md`.
-- **New doc:** a new folder with its tabs, plus `"<dir>": null` in `docsync.json`; files in name order, the first is the main tab.
-- **Rename a doc:** its entry in `docsync.json` is `{"id": "<doc id>", "name": "<doc name>"}`; change the name.
-- **Project name:** `"name"` at the top of `docsync.json`.
+Only docsync writes `docsync.json`; use these commands for it.
 
-Before handing over, check that every `<?claude block KEY?>` has its key in `blocks.json`.
+- **New tab:** a new `.md` with `# <tab name>` as its first line. It can carry new diagrams, not ones of other tabs. A file in the doc's `dir` becomes a tab by itself, unless `docsync.json` has `"files": "kept"`. Otherwise run `docsync tab add <file> [--doc <doc key>] [--parent <tab file>]`.
+- **Tab under another tab:** `docsync tab parent <file> <parent tab file>`; without the parent, it moves to the top.
+- **Rename a tab:** edit its `# heading`.
+- **Delete a tab:** delete its file.
+- **New doc:** write its tab files, then `docsync doc import --name "<doc name>" <files, the main tab first>`. It makes the doc at once.
+- **Rename a doc:** `docsync doc rename <doc key> "<name>"`.
+- **Project name:** `docsync project name "<name>"`.
+
+Do not edit `docsync.json` or `.docsync/state.json` by hand. Before handing over, check that every `<?claude block KEY?>` has its key in its `blocks.json`.
 
 ## Comments
 
@@ -45,6 +51,6 @@ To act on a comment:
 4. Reply in the thread and say what you changed. Use the Docs `create` tool with `object` `"utterance"`, the same `container`, and `payload` `{"value": {"body": "<reply>", "parent": {"object": "utterance", "id": "<thread id>"}}}`.
 5. Do not resolve a thread. The person who wrote it resolves it.
 
-The doc gets your edit at the next sync. In the sync modes, the sync runs when you finish your turn.
+The doc gets your edit at the next sync. In the sync modes, the sync runs when you finish your turn. If the sync makes a new doc, it asks you to open it once with the Artifact tool; do that.
 
 If the sync says that a comment which asks Claude stops a tab, your edit removes all the words of that comment, and nobody answered it yet. Reply in its thread, and the next sync sends the tab.

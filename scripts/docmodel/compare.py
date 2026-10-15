@@ -2,7 +2,7 @@
 mention labels do not count."""
 import hashlib, json, re
 
-from .markdown import CHIP, to_markdown
+from .markdown import sub_chips, to_markdown
 
 
 def render(md, blocks):
@@ -12,10 +12,10 @@ def render(md, blocks):
         if v.get("type") == "mention":
             v.pop("label", None)  # the server fills labels in itself
         return json.dumps(v, ensure_ascii=False, sort_keys=True)
-    return CHIP.sub(lambda m: spec(m.group(1)), md)
+    return sub_chips(md, lambda m: spec(m.group(1)))
 
 
-BLOCK_START = re.compile(r"\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||```|---\s*$|<\?claude block)")
+BLOCK_START = re.compile(r"\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||```|---\s*$|<\?claude block|<!-- docsync )")
 
 
 def unwrap(lines):
@@ -32,7 +32,7 @@ def unwrap(lines):
         prev = out[-1] if out else ""
         ps = prev.strip()
         if (not fence and s and ps and not BLOCK_START.match(l) and not prev.endswith(("\\", "  "))
-                and not re.match(r"(#{1,6}\s|\||```|---\s*$|<\?claude block)", ps)):
+                and not re.match(r"(#{1,6}\s|\||```|---\s*$|<\?claude block|<!-- docsync )", ps)):
             out[-1] = prev.rstrip() + " " + s
         else:
             out.append(l)

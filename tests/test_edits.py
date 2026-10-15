@@ -141,3 +141,46 @@ class Split(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Attributes(unittest.TestCase):
+    """What markdown has no syntax for: written with set, or as block content."""
+
+    def test_underline_goes_as_block_content(self):
+        ops = plan(MD.replace("Alpha bravo", "Alpha <u>bravo</u>"))
+        self.assertEqual(len(ops), 1)
+        src = ops[0]["with"]
+        self.assertEqual(src["as"], "blocks")
+        self.assertEqual(src["from"]["content"][0]["content"][1],
+                         {"type": "text", "text": "bravo", "marks": [{"type": "underline"}]})
+
+    def test_an_embed_width_is_set(self):
+        xml = "<doc><embed id='a.1' h='e1' ref='node/w1'/></doc>"
+        chips = {"c1": {"type": "embed", "ref": "node/w1"}}
+        ops = plan('<!-- docsync {"width":480} -->\n<?claude block c1?>\n', xml, chips)
+        self.assertEqual(ops, [{"op": "set", "target": {"kind": "blocks", "ids": ["a.1"]}, "attrs": {"width": 480}}])
+
+    def test_table_header_widths_and_a_merge(self):
+        md = ('<!-- docsync {"header":false,"spans":{"1,0":[2,1]},"widths":[220,null]} -->\n'
+              "| A | B |\n| --- | --- |\n| x |  |\n")
+        xml = TAB.replace("<text>y</text>", "")
+        body = md + "\n"
+        full = MD.replace("| A | B |\n| --- | --- |\n| x | y |\n", body)
+        ops = plan(full, xml)
+        self.assertEqual([(o["op"], o["target"]["ids"], o.get("attrs")) for o in ops],
+                         [("set", ["a.15"], {"colspan": 2, "rowspan": None}), ("delete", ["a.17"], None)])
+        merged = xml.replace("<cell id='.15'>", "<cell id='.15' colspan='2'>").replace(
+            "<cell id='.17'><paragraph id='.18' h='h18'></paragraph></cell>", "")
+        ops = plan(full, merged)
+        self.assertEqual(sorted((o["target"]["ids"][0], json_of(o["attrs"])) for o in ops),
+                         [("a.10", '{"colwidth": [220]}'), ("a.10", '{"header": false}'),
+                          ("a.12", '{"header": false}'), ("a.15", '{"colwidth": [220, 0]}')])
+
+    def test_a_chip_in_code_is_text(self):
+        src = write.md_source("see `<?claude block zz?>` and <?claude block k?>", {"k": {"type": "date", "value": "x"}})
+        self.assertEqual(src["blocks"], {"k": {"type": "date", "value": "x"}})
+
+
+def json_of(o):
+    import json
+    return json.dumps(o, sort_keys=True)

@@ -57,12 +57,33 @@ class ToMarkdown(unittest.TestCase):
     def test_a_table_without_header_row_reads_its_first_row_as_the_header(self):
         xml = ("<doc><table id='a.1'><row><cell><paragraph><text>x</text></paragraph></cell></row>"
                "<row><cell><paragraph><text>y</text></paragraph></cell></row></table></doc>")
-        self.assertEqual(m.to_markdown(xml)[0], "| x |\n| --- |\n| y |\n")
+        self.assertEqual(m.to_markdown(xml)[0], '<!-- docsync {"header":false} -->\n| x |\n| --- |\n| y |\n')
 
-    def test_underline_and_highlight_read_as_their_text(self):
+    def test_underline_and_highlight_read_as_u_and_mark(self):
         xml = ("<doc><paragraph id='a.1'><text>plain </text><text><underline>under</underline></text><text> and </text>"
                "<text><highlight><bold>high</bold></highlight></text></paragraph></doc>")
-        self.assertEqual(m.to_markdown(xml)[0], "plain under and **high**\n")
+        self.assertEqual(m.to_markdown(xml)[0], "plain <u>under</u> and **<mark>high</mark>**\n")
+
+    def test_a_literal_tag_in_text_is_escaped(self):
+        xml = "<doc><paragraph id='a.1'><text>write &lt;u&gt; for underline</text></paragraph></doc>"
+        self.assertEqual(m.to_markdown(xml)[0], "write \\<u\\> for underline\n")
+
+    def test_merged_cells_widths_and_alignment_go_to_the_line_above_the_table(self):
+        cell = lambda t, a="": f"<cell{a}><paragraph><text>{t}</text></paragraph></cell>"
+        xml = ("<doc><table id='a.1'><row>" + cell("h1", " header='true' colwidth='[220]'") + cell("h2", " header='true'")
+               + "</row><row>" + cell("wide", " colspan='2' align='center'") + "</row><row>" + cell("a") + cell("b")
+               + "</row></table></doc>")
+        self.assertEqual(m.to_markdown(xml)[0],
+                         '<!-- docsync {"align":{"1,0":"center"},"spans":{"1,0":[2,1]},"widths":[220,null]} -->\n'
+                         "| h1 | h2 |\n| --- | --- |\n| wide |  |\n| a | b |\n")
+
+    def test_an_embed_keeps_its_width_and_alignment_on_the_line_above(self):
+        md, chips, _ = m.to_markdown("<doc><embed id='a.1' ref='node/w1' width='480' align='center'/></doc>")
+        self.assertEqual(md, '<!-- docsync {"align":"center","width":480} -->\n<?claude block c1?>\n')
+
+    def test_chip_keys_skip_code(self):
+        md = "a <?claude block k1?> `<?claude block zz?>`\n\n```\n<?claude block yy?>\n```\n<?claude block k2?>"
+        self.assertEqual(m.chip_keys(md), ["k1", "k2"])
 
     def test_a_pending_block_reads_as_its_chip(self):
         md, chips, _ = m.to_markdown("<doc><pending id='a.1' intent='Risks: a placeholder'/></doc>")

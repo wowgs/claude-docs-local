@@ -1,5 +1,5 @@
 """The Claude Docs connector: Claude Code's claude.ai login, the connector's MCP endpoint, tool calls."""
-import hashlib, json, os, platform, shutil, subprocess, sys, tempfile, threading, time, unicodedata, urllib.error
+import base64, hashlib, json, os, platform, shutil, subprocess, sys, tempfile, threading, time, unicodedata, urllib.error
 import urllib.request, uuid
 
 from . import bridge
@@ -162,6 +162,10 @@ def call(tool, args, soft=False):
     text = "".join(c.get("text", "") for c in result.get("content", []))
     i = text.find('{"verdict"')
     out = json.JSONDecoder().raw_decode(text[i:])[0] if i >= 0 else {"verdict": "?", "raw": text}
+    images = [c.get("data") or (c.get("source") or {}).get("data") for c in result.get("content", [])
+              if c.get("type") == "image"]  # MCP gives {"data"}, the session's bridge {"source": {"data"}}
+    if any(images):
+        out["_images"] = [base64.b64decode(b) for b in images if b]
     if out.get("verdict") != "allow":
         if soft:
             return out

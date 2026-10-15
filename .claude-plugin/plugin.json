@@ -1,6 +1,6 @@
 {
   "name": "docs-local",
-  "version": "2.6.9",
+  "version": "3.0.0",
   "description": "/docs-local turns local docs on or off for a project; docsync syncs them with claude.ai Docs.",
   "author": {
     "name": "wowgs"

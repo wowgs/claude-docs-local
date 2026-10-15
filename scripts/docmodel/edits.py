@@ -13,10 +13,13 @@ import difflib, json, re
 
 from .blocks import (ITEM, aligns_of, head_and_rest, item_body, items_of, kind_of, list_kind, plain, rows_of, simple,
                      split_blocks)
+from . import inline
 from .compare import compare_lines
-from .markdown import Md, aligns, blocks_of
+from .markdown import Md, aligns, blocks_of, split_attrs, table_attrs, table_grid
 from .tree import elements, parse
 from .write import CAP, md_source
+
+ALIGNED = {":--": "left", ":-:": "center", "--:": "right", "---": None}  # a column's alignment by its separator
 
 MATCH = 0.5  # two changed blocks of a kind are the same block edited when their texts are at least this similar
 
@@ -84,9 +87,18 @@ class Plan:
         return g
 
     def replace(self, el, md):
-        """Replace one block by id: a paragraph keeps its unchanged words, any other block is made anew."""
+        """Replace one block by id: a paragraph keeps its unchanged words, any other block is made anew. A paragraph
+        with <u> or <mark> goes as block content, since the doc's markdown does not read those."""
+        src = md_source(md, self.chips)
+        if el["tag"] == "paragraph" and inline.has_tags(md):
+            m = re.match(r"(#{1,6})\s+", md)
+            try:
+                src = {"as": "blocks", "from": {"kind": "inline", "content": [
+                    inline.paragraph(md[m.end():] if m else md, self.chips, len(m.group(1)) if m else None)]}}
+            except inline.NotInline:
+                pass  # its text without those marks; the doc reads back without them
         self.replaces.append({"op": "replace", "target": {"kind": "blocks", "ids": [el["attrs"]["id"]]},
-                              "with": md_source(md, self.chips), "allowDetach": True, **self.guard(el)})
+                              "with": src, "allowDetach": True, **self.guard(el)})
 
     def reword(self, el, text):
         self.replaces.append({"op": "replace", "target": {"kind": "blocks", "ids": [el["attrs"]["id"]]},
@@ -122,8 +134,67 @@ class Plan:
             if i is not None and j is None:
                 self.delete(old[i])
             elif i is not None and not same:
-                self.block(old[i], new[j])
+                old_attrs, old_body = split_attrs(old_text[i])
+                new_attrs, new_body = split_attrs(new[j])
+                if key(old_body, self.md.blocks) == key(new_body, self.chips):
+                    self.attrs(old[i], old_attrs, new_attrs, new_body)
+                else:  # the text first; the next pass writes the attributes
+                    self.block(old[i], new_body)
         return self
+
+    # attributes that markdown has no syntax for (the line above a block): written with set
+
+    def attrs(self, el, old, new, text):
+        if el["tag"] == "embed":
+            change = {k: new.get(k) for k in ("width", "align") if old.get(k) != new.get(k)}
+            if change:
+                self.sets.append(set_op(el, change))
+        elif el["tag"] == "table":
+            self.table_attrs(el, old, new, text)
+
+    def table_attrs(self, el, old, new, text):
+        """A table's merged cells, header row, column widths and cell alignment, as its line above says."""
+        _, anchors, ncols = table_grid(el)
+        old_spans, new_spans = old.get("spans", {}), new.get("spans", {})
+        if old_spans != new_spans:
+            if any(new_spans.get(k) != v for k, v in old_spans.items()):  # a merge undone or changed: the table
+                self.replace(el, text)  # is written again, and the next pass merges what the line asks for
+                return
+            for pos, (cs, rs) in new_spans.items():
+                if pos in old_spans:
+                    continue
+                r, c = map(int, pos.split(","))
+                if (r, c) not in anchors:
+                    raise NoPlan(f"no cell at {pos} to merge")
+                self.sets.append(set_op(anchors[(r, c)], {"colspan": cs if cs > 1 else None,
+                                                          "rowspan": rs if rs > 1 else None}))
+                for dr in range(rs):
+                    for dc in range(cs):
+                        if (dr, dc) != (0, 0) and (r + dr, c + dc) in anchors:
+                            self.delete(anchors[(r + dr, c + dc)])
+            return  # the next pass reads the merged table and writes the rest
+        if old.get("header", True) != new.get("header", True):
+            for c in range(ncols):
+                if (0, c) in anchors:
+                    self.sets.append(set_op(anchors[(0, c)], {"header": new.get("header", True)}))
+        widths = (new.get("widths") or []) + [None] * ncols
+        sep = text.split("\n")[1].strip().strip("|").split("|") if "\n" in text else []
+        column = [ALIGNED.get((":-" if x.strip().startswith(":") else "--") +
+                              (":" if x.strip().endswith(":") and len(x.strip()) > 1 else "-")) for x in sep]
+        column += [None] * ncols
+        cell_align = new.get("align", {})
+        for (r, c), cell in anchors.items():
+            cs = int(cell["attrs"].get("colspan", 1))
+            want = [widths[c + k] or 0 for k in range(cs)]
+            try:
+                have = json.loads(cell["attrs"].get("colwidth", "null"))
+            except ValueError:
+                have = None
+            if (want if any(want) else None) != (have if have and any(have) else None):
+                self.sets.append(set_op(cell, {"colwidth": want if any(want) else None}))
+            align = cell_align.get(f"{r},{c}", column[c])
+            if align != cell["attrs"].get("align"):
+                self.sets.append(set_op(cell, {"align": align}))
 
     def block(self, el, text):
         kind = kind_of_el(el)
@@ -188,7 +259,7 @@ class Plan:
         columns or another alignment, a changed cell with several paragraphs or emptied)."""
         new = rows_of(text)
         old = elements(el)
-        if not new or not old or aligns_of(text) != aligns(el):
+        if not new or not old or aligns_of(text) != aligns(el) or table_attrs(el).get("spans"):
             return False
         old_cells = [self.md.cells(r) for r in old]
         cols = len(old_cells[0])

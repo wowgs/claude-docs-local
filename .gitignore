@@ -1,3 +1,13 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Claude Code settings of this machine
+.claude/
+
+# docs-local for this repo: kept out of git while 3.0 is in development
+docs/
+docsync.json
+.docsync-trash/
+.docsync-last.json
+.docsync-lock
