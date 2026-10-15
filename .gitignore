@@ -5,9 +5,12 @@ __pycache__/
 # Claude Code settings of this machine
 .claude/
 
-# docs-local for this repo: kept out of git while 3.0 is in development
+# docs-local for this repo: its docs are kept out of git
 docs/
 docsync.json
-.docsync-trash/
-.docsync-last.json
-.docsync-lock
+/.docsync/
+# docs-local: this machine's sync state
+/.docsync/state.json
+/.docsync/push.json
+/.docsync/lock
+/.docsync-trash/
