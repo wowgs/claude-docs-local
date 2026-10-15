@@ -1,6 +1,6 @@
 ---
 name: docs-local
-description: This project's claude.ai Docs are local markdown files. Read and edit those, never the doc through the Docs tools. Load this skill before you read or change a Docs artifact here, and before you make a new doc, tab or diagram. When you change code, update the docs here that describe it, in the same task.
+description: In this project, all work with claude.ai Docs goes through docs-local. Each doc is local markdown files, and docsync syncs them with the doc. You read, change and make docs, tabs and diagrams only as these files. The Docs tools here only read comments and reply to them. Load this skill before any work with a doc here. When you change code, update the docs here that describe it, in the same task.
 user-invocable: false
 ---
 
