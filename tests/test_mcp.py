@@ -1,8 +1,8 @@
-import io, os, time, unittest, urllib.error
+import base64, io, json, os, time, unittest, urllib.error
 from unittest import mock
 
-import support  # noqa: F401
-from docsynclib import mcp
+import support
+from docsynclib import mcp, textio
 
 
 def login(tok, minutes):
@@ -125,6 +125,133 @@ class Refresh(unittest.TestCase):
         with mock.patch.object(mcp, "claude_cli", return_value=None), mock.patch.object(mcp.subprocess, "run") as run:
             mcp.refresh_login()
         run.assert_not_called()
+
+    def test_a_refresh_that_fails_to_start_is_left_to_the_next_check(self):
+        with mock.patch.object(mcp, "claude_cli", return_value="/bin/claude"), \
+                mock.patch.object(mcp.subprocess, "run", side_effect=OSError("gone")):
+            mcp.refresh_login()  # no error: token() then finds the login still ended and says so
+
+
+class Login(unittest.TestCase):
+    """Where Claude Code keeps its login: the Keychain on macOS, else .credentials.json in its config folder."""
+
+    def setUp(self):
+        self.dir = support.tempfile.mkdtemp(prefix="docsync-login-")
+        self.env = mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": self.dir})
+        self.env.start()
+
+    def tearDown(self):
+        self.env.stop()
+        support.shutil.rmtree(self.dir)
+
+    def keychain(self, out, code=0):
+        return mock.patch.object(mcp.subprocess, "run", return_value=mock.Mock(returncode=code, stdout=out))
+
+    def test_the_keychain_first_on_macos(self):
+        raw = json.dumps({"claudeAiOauth": login("k", 60)})
+        with mock.patch.object(mcp.platform, "system", return_value="Darwin"), self.keychain(raw) as run:
+            self.assertEqual(mcp.stored_login()["accessToken"], "k")
+        self.assertIn(mcp.keychain_service(), run.call_args[0][0])
+
+    def test_the_file_when_the_keychain_has_none(self):
+        textio.write(os.path.join(self.dir, ".credentials.json"), json.dumps({"claudeAiOauth": login("f", 60)}))
+        with mock.patch.object(mcp.platform, "system", return_value="Darwin"), self.keychain("", 44):
+            self.assertEqual(mcp.stored_login()["accessToken"], "f")
+        with mock.patch.object(mcp.platform, "system", return_value="Linux"):
+            self.assertEqual(mcp.stored_login()["accessToken"], "f")
+
+    def test_no_login_or_another_kind_of_login_ends_the_run(self):
+        with mock.patch.object(mcp.platform, "system", return_value="Windows"):
+            with self.assertRaises(mcp.RunError) as e:
+                mcp.stored_login()
+        self.assertIn("Windows Credential Manager", str(e.exception))
+        textio.write(os.path.join(self.dir, ".credentials.json"), json.dumps({"apiKey": "x"}))
+        with mock.patch.object(mcp.platform, "system", return_value="Linux"):
+            with self.assertRaises(mcp.RunError) as e:
+                mcp.stored_login()
+        self.assertIn("not logged in with a claude.ai account", str(e.exception))
+
+    def test_the_claude_command_on_path_or_where_its_installer_puts_it(self):
+        with mock.patch.object(mcp.shutil, "which", return_value="/usr/bin/claude"):
+            self.assertEqual(mcp.claude_cli(), "/usr/bin/claude")
+        with mock.patch.object(mcp.shutil, "which", return_value=None), \
+                mock.patch.object(mcp.os, "access", return_value=True):
+            self.assertTrue(mcp.claude_cli().endswith(os.path.join(".local", "bin", "claude")))
+        with mock.patch.object(mcp.shutil, "which", return_value=None), \
+                mock.patch.object(mcp.os, "access", return_value=False):
+            self.assertIsNone(mcp.claude_cli())
+
+
+class Call(unittest.TestCase):
+    """One tool call: through the session's bridge, else over HTTP with the stored login; its answer read from the
+    text the connector returns."""
+
+    def setUp(self):
+        mcp._url = None
+
+    def tearDown(self):
+        mcp._url = None
+
+    @staticmethod
+    def result(answer, prefix="", images=()):
+        return {"content": [{"type": "text", "text": prefix + json.dumps(answer)}] + list(images)}
+
+    def test_through_the_bridge(self):
+        png = base64.b64encode(b"PNG").decode()
+        res = self.result({"verdict": "allow", "value": 1}, "note\n", [{"type": "image", "source": {"data": png}}])
+        with mock.patch.object(mcp.bridge, "call", return_value=res) as bridge, \
+                mock.patch.object(mcp, "http") as http:
+            out = mcp.call("read", {"ref": {}})
+        bridge.assert_called_once_with("read", {"ref": {}})
+        http.assert_not_called()
+        self.assertEqual((out["value"], out["_images"]), (1, [b"PNG"]))
+
+    def test_a_refusal_is_returned_when_soft_else_raised(self):
+        res = self.result({"verdict": "deny", "reason": "access"})
+        with mock.patch.object(mcp.bridge, "call", return_value=res):
+            self.assertEqual(mcp.call("read", {}, soft=True)["reason"], "access")
+            with self.assertRaises(mcp.Refused):
+                mcp.call("read", {})
+
+    def test_an_answer_that_is_not_json(self):
+        with mock.patch.object(mcp.bridge, "call", return_value={"content": [{"type": "text", "text": "boom"}],
+                                                                 "isError": True}):
+            self.assertEqual(mcp.call("read", {}, soft=True), {"verdict": "error", "raw": "boom"})
+
+    def test_over_http_with_the_connector_found_once(self):
+        servers = json.dumps({"data": [{"id": "s1", "display_name": "Other"}, {"id": "s2", "display_name": "Claude Docs"}]})
+        sse = "event: message\ndata: " + json.dumps({"result": self.result({"verdict": "allow", "n": 2})}) + "\n"
+        answers = [(servers, "application/json"), (sse, "text/event-stream"),
+                   (json.dumps({"result": self.result({"verdict": "allow", "n": 3})}), "application/json")]
+        with mock.patch.object(mcp.bridge, "call", return_value=None), \
+                mock.patch.object(mcp, "http", side_effect=answers) as http:
+            self.assertEqual(mcp.call("read", {})["n"], 2)
+            self.assertEqual(mcp.call("read", {})["n"], 3)
+        self.assertEqual(http.call_count, 3)  # the servers list read once
+        self.assertEqual(http.call_args[0][0], mcp.PROXY + "s2")
+        body = json.loads(http.call_args[0][1])
+        self.assertEqual((body["method"], body["params"]["name"]), ("tools/call", "read"))
+
+    def test_no_connector_or_an_rpc_error_ends_the_run(self):
+        with mock.patch.object(mcp.bridge, "call", return_value=None), \
+                mock.patch.object(mcp, "http", return_value=(json.dumps({"data": []}), "application/json")):
+            with self.assertRaises(mcp.RunError) as e:
+                mcp.call("read", {})
+        self.assertIn("connector not found", str(e.exception))
+        mcp._url = "https://proxy/s"
+        with mock.patch.object(mcp.bridge, "call", return_value=None), \
+                mock.patch.object(mcp, "http", return_value=(json.dumps({"error": {"code": -1}}), "application/json")):
+            with self.assertRaises(mcp.RunError):
+                mcp.call("read", {})
+
+    def test_patch_doc_and_find_key(self):
+        with mock.patch.object(mcp, "call", return_value={"verdict": "allow"}) as call:
+            mcp.patch_doc("D1", {"op": "set", "path": ["name"], "value": "x"})
+        self.assertEqual(call.call_args[0], ("update", {"ref": {"object": "project", "id": "D1"},
+                                                        "payload": {"kind": "patch", "patch": [
+                                                            {"op": "set", "path": ["name"], "value": "x"}]}}))
+        self.assertEqual(mcp.find_key({"a": [{"b": 1}, {"lids": {"f": "x"}}]}, "lids"), {"f": "x"})
+        self.assertIsNone(mcp.find_key({"a": [1, "s"]}, "lids"))
 
 
 if __name__ == "__main__":

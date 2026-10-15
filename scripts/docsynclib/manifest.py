@@ -25,24 +25,33 @@ CONFLICTS = (MERGE, LOCAL)
 SCHEMA = 3  # a change is a breaking update (CHANGELOG.md); docsync moves older files to it when it reads them
 
 
-def load(path=CONFIG):
-    """The manifest, moved to the current schema first when it is older (migrate.py for 2.x, here for 3.0)."""
-    cfg = load_json(path)
+def path_of(root):
+    return os.path.join(root, CONFIG)
+
+
+def exists(root):
+    return os.path.exists(path_of(root))
+
+
+def load(root, report=None):
+    """The project's manifest, moved to the current schema first when it is older (migrate.py for 2.x, here for
+    3.0). report: where the move from 2.x is reported."""
+    cfg = load_json(path_of(root))
     if cfg.get("schema", 1) < 2:
         from . import migrate
-        migrate.project(path)
-        cfg = load_json(path)
+        migrate.project(root, report)
+        cfg = load_json(path_of(root))
     if cfg.get("schema") == 2:  # 3.0: "files" managed | kept; ownership now follows from where a file is
         cfg.pop("files", None)
         cfg["schema"] = SCHEMA
-        save(cfg, path)
+        save(root, cfg)
     if normalize(cfg):
-        save(cfg, path)
+        save(root, cfg)
     return cfg
 
 
-def save(cfg, path=CONFIG):
-    save_json(path, cfg)
+def save(root, cfg):
+    save_json(path_of(root), cfg)
 
 
 def normalize(cfg):
@@ -101,12 +110,6 @@ def name_taken(cfg, key, file):
     b = os.path.splitext(os.path.basename(file))[0].lower()
     return any(t["file"] != file and os.path.splitext(os.path.basename(t["file"]))[0].lower() == b
                for t in cfg["docs"][key].get("tabs", []))
-
-
-def free_path(cfg, key, path):
-    """Can a tab file of this doc be moved or made at path: no file there, no tab of the project maps it, and no other
-    tab of the doc has its name?"""
-    return not os.path.exists(path) and path not in mapped(cfg) and not name_taken(cfg, key, path)
 
 
 def refs(cfg):

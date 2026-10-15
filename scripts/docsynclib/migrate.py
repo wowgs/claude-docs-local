@@ -7,11 +7,8 @@ chips and diagram code (<tab>.blocks.json, <tab>.widget-<id>.jsx) and .docsync-s
 state in .docsync/state.json, the background push in .docsync/push.json. The old state files go to the trash."""
 import os
 
-from . import output as out
-from .files import (blocks_path, ensure_gitignore, new_widget_path, posix, PUSH, slug, STATE, SVC, to_trash, TRASH,
-                    widget_path)
-from .manifest import MERGE, save, SCHEMA, unique
-from .textio import load_json, save_json
+from .files import blocks_path, Files, new_widget_path, posix, PUSH, slug, STATE, SVC, TRASH, widget_path
+from .manifest import CONFIG, MERGE, save, SCHEMA, unique
 
 KEEP = ("name", "node", "rev", "hash", "h1", "dhash", "conflict_rev")
 
@@ -21,18 +18,19 @@ def entry(v):
     return (v.get("id"), v.get("name")) if isinstance(v, dict) else (v, None)
 
 
-def project(path):
-    """Move the project whose docsync.json is at path (the project root is the working folder)."""
-    cfg = load_json(path)
+def project(root, report=None):
+    """Move the project at root; report: where to say so."""
+    fs = Files(root)
+    cfg = fs.load_json(CONFIG)
     docs, st = {}, {"schema": 2, "docs": {}}
-    if os.path.exists(STATE):
-        st = load_json(STATE)
+    if fs.exists(STATE):
+        st = fs.load_json(STATE)
     olds = []
     for d, raw in cfg.get("docs", {}).items():
         doc_id, name = entry(raw)
         key = unique(slug(os.path.basename(d.rstrip("/"))), docs)
         old_path = os.path.join(d, ".docsync-state.json")
-        old = load_json(old_path) if os.path.exists(old_path) else {"tabs": {}}
+        old = fs.load_json(old_path) if fs.exists(old_path) else {"tabs": {}}
         olds.append(old_path)
         tabs, sd = [], {"id": doc_id, "tabs": {}}
         for tab_id, t in sorted(old.get("tabs", {}).items(), key=lambda kv: kv[1].get("base", "")):
@@ -41,27 +39,27 @@ def project(path):
             sd["tabs"][tab_id] = {k: t[k] for k in KEEP if k in t}
             sd["tabs"][tab_id]["widgets"] = {w: {"pub": i.get("pub"), "hash": i.get("hash")}
                                              for w, i in t.get("widgets", {}).items()}
-        move_own_files(d, key)
+        move_own_files(fs, d, key)
         docs[key] = {"id": doc_id, **({"name": name} if name else {}), "dir": posix(d), "tabs": tabs}
         st["docs"][key] = sd
-    os.makedirs(SVC, exist_ok=True)
-    save_json(STATE, st)
-    if os.path.exists(".docsync-last.json"):
-        os.replace(".docsync-last.json", PUSH)
-    save({"schema": SCHEMA, **({"name": cfg["name"]} if cfg.get("name") else {}),
-          "conflicts": cfg.get("conflicts", MERGE), "docs": docs}, path)
+    fs.save_json(STATE, st)
+    if fs.exists(".docsync-last.json"):
+        fs.move(".docsync-last.json", PUSH)
+    save(root, {"schema": SCHEMA, **({"name": cfg["name"]} if cfg.get("name") else {}),
+                "conflicts": cfg.get("conflicts", MERGE), "docs": docs})
     for p in olds + [".docsync-lock"]:
-        to_trash(p)
-    ensure_gitignore()
-    out.ev("info", path, f"moved to docsync 3.0: chips and diagram code in {SVC}/, the state in {STATE} "
-                         f"(old state files in {TRASH})")
+        fs.to_trash(p)
+    added = fs.ensure_gitignore()
+    if report:
+        if added:
+            report.ev("info", ".gitignore", "added docsync's own state files")
+        report.ev("info", CONFIG, f"moved to docsync 3.0: chips and diagram code in {SVC}/, the state in {STATE} "
+                                  f"(old state files in {TRASH})")
 
 
-def move_own_files(d, key):
+def move_own_files(fs, d, key):
     """A 2.x doc folder's chips and diagram code to .docsync/<doc key>/."""
-    if not os.path.isdir(d):
-        return
-    for f in sorted(os.listdir(d)):
+    for f in fs.listdir(d):
         src = os.path.join(d, f)
         if f.endswith(".blocks.json"):
             dst = blocks_path(key, f[:-len(".blocks.json")] + ".md")
@@ -72,6 +70,5 @@ def move_own_files(d, key):
                 widget_path(key, b + ".md", wid)
         else:
             continue
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        if not os.path.exists(dst):
-            os.replace(src, dst)
+        if not fs.exists(dst):
+            fs.move(src, dst)

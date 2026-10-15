@@ -34,6 +34,11 @@ class Paths(unittest.TestCase):
         for src, p in paths:
             self.assertTrue(os.path.exists(os.path.join(REPO, p)), f"{src}: {p}")
 
+    def test_each_plugin_names_its_skill_after_itself(self):
+        name = lambda *p: re.search(r"^name: (\S+)$", text(*p), re.M).group(1)
+        self.assertEqual(name("skills", "docs-local", "SKILL.md"), "docs-local")
+        self.assertEqual(name("files", "SKILL.md"), "docs-local-files")
+
     def test_the_files_plugin_names_no_root_path_it_does_not_ship(self):
         self.assertEqual(ROOT_VAR.findall(text("files", "SKILL.md")), [])
 

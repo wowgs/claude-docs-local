@@ -6,9 +6,8 @@ folder). Links between files that are tabs become mentions in the doc, and links
 when the tabs are pulled (docmodel/fileview.py)."""
 import json, os, re, sys
 
-from . import manifest, output as out
-from .files import posix, read_text, slug, SVC
-from .manifest import CONFIG
+from . import manifest
+from .files import Files, posix, slug, SVC
 from .projects import project_manifest, project_name, project_of
 from .push import ARTIFACT
 from .sync import cmd_sync
@@ -37,7 +36,8 @@ LOSSES = [  # (what, pattern): markdown the doc does not keep as written
 
 def scan(root):
     """The project's markdown files that could become tabs: [{"file", "heading", "bytes", "links", "mapped"}]."""
-    cfg = manifest.load(os.path.join(root, CONFIG)) if os.path.exists(os.path.join(root, CONFIG)) else {"docs": {}}
+    fs = Files(root)
+    cfg = manifest.load(root) if manifest.exists(root) else {"docs": {}}
     taken = manifest.mapped(cfg)
     found = []
     for d, dirs, files in os.walk(root):
@@ -46,7 +46,7 @@ def scan(root):
             if not f.endswith(".md") or SKIP_FILES.match(f):
                 continue
             path = posix(os.path.relpath(os.path.join(d, f), root))
-            text = read_text(os.path.join(root, path)) or ""
+            text = fs.read(path) or ""
             links = sorted({posix(os.path.normpath(os.path.join(os.path.dirname(path), m.group(1))))
                             for m in LINK.finditer(text) if "://" not in m.group(1)})
             found.append({"file": path, "heading": h1(text), "bytes": len(text.encode()), "links": links,
@@ -54,9 +54,9 @@ def scan(root):
     return found
 
 
-def check(path):
-    """What in one file would not survive the doc as written: [what]."""
-    text = read_text(path)
+def check(root, path):
+    """What in one file of the project would not survive the doc as written: [what]."""
+    text = Files(root).read(path)
     if text is None:
         return ["the file does not exist"]
     fm = LOSSES[0][1].match(text)
@@ -72,13 +72,13 @@ def check(path):
     return losses
 
 
-def cmd_import(args):
+def cmd_import(args, report):
     root = project_of(os.getcwd())
     if not root:
         sys.exit("not in a project: turn it on with /docs-local in Claude Code, or docsync project use")
     here = os.getcwd()
-    os.chdir(root)
-    out.CTX["project"] = project_name(root)
+    fs = Files(root)
+    report.project = project_name(root)
     if args.scan:
         print(json.dumps({"root": root, "files": scan(root)}, ensure_ascii=False, indent=1))
         return
@@ -86,31 +86,31 @@ def cmd_import(args):
     if not files:
         sys.exit("name the files: docsync doc import [--name NAME] FILE...")
     if args.check:
-        print(json.dumps({f: check(f) for f in files}, ensure_ascii=False, indent=1))
+        print(json.dumps({f: check(root, f) for f in files}, ensure_ascii=False, indent=1))
         return
     cfg = project_manifest(root)
     taken = manifest.mapped(cfg)
     for f in files:
-        if not os.path.exists(f):
+        if not fs.exists(f):
             sys.exit(f"{f}: no such file")
         if f in taken:
             sys.exit(f"{f}: already a tab of {taken[f][0]}")
     names = [os.path.splitext(os.path.basename(f))[0].lower() for f in files]
     if len(set(names)) < len(names):
         sys.exit("two of these files have the same name; a doc's tab files need names of their own")
-    name = args.name or h1(read_text(files[0])) or os.path.splitext(os.path.basename(files[0]))[0]
+    name = args.name or h1(fs.read(files[0])) or os.path.splitext(os.path.basename(files[0]))[0]
     key = manifest.unique(slug(name), cfg["docs"])
     d = posix(os.path.join(manifest.DOCS, key))
-    while any(f.startswith(d + "/") for f in files) or os.path.exists(d):  # imported files stay the project's: the
+    while any(f.startswith(d + "/") for f in files) or fs.exists(d):  # imported files stay the project's: the
         key = manifest.unique(key + "-doc", cfg["docs"])  # doc's own folder for new tabs is one they are not in
         d = posix(os.path.join(manifest.DOCS, key))
     cfg["docs"][key] = {"id": None, "name": name, "dir": d, "tabs": [{"id": None, "file": f} for f in files]}
-    manifest.save(cfg)
-    args.dirs, args.force, args.config = [key], False, CONFIG
-    cmd_sync(args, "push")
-    out.say(out.summary(out.STATS, "doc"))
-    doc_id = manifest.load(CONFIG)["docs"].get(key, {}).get("id")
+    manifest.save(root, cfg)
+    args.dirs, args.force = [key], False
+    cmd_sync(root, args, "push", report)
+    report.say(report.summary("doc"))
+    doc_id = manifest.load(root)["docs"].get(key, {}).get("id")
     if doc_id:
-        out.say(f"Doc key: {key}; its tabs' chips, diagram code and pictures go in .docsync/{key}/.")
-        out.say(f"Claude: open the doc once with the Artifact tool, action \"open\", url {ARTIFACT + doc_id}, so it "
-                "shows in this session's Outputs.")
+        report.say(f"Doc key: {key}; its tabs' chips, diagram code and pictures go in .docsync/{key}/.")
+        report.say(f"Claude: open the doc once with the Artifact tool, action \"open\", url {ARTIFACT + doc_id}, so "
+                   "it shows in this session's Outputs.")

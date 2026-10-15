@@ -2,6 +2,20 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.2.0 — 2026-10-15
+
+The architecture work that the review of 4.0.0 asked for and 4.1.0 left out. What a sync does is unchanged, except these fixes:
+
+- **The skill of `docs-local-files` is named `docs-local-files`.** Both plugins named their skill `docs-local`, so the skill list showed two skills of one name.
+- **Exit code 1 for a warning in any project.** A `docsync` run over several projects ended with 0 when the warning was not in the last one; it now counts the whole run.
+
+Code:
+- `output.Report` holds a run's events (`output.Event`, one kind per result) instead of module globals; the terminal output, `--json` and the hooks read them from it. A `Project` carries its report, so the sync code writes to no global.
+- Every path is built from the project root (`Project.root`, `files.Files`); docsync no longer changes the working folder (`cli`, `importer`, `hooks` used `os.chdir`). A sync, a hook or a command run from another folder writes only in the project.
+- What docsync reads from the doc and writes to it is in `remote.py` (tab lists and revs read at once, the write of a tab piece by piece or whole, tabs and docs made, renamed, moved, deleted); a tab file's helpers are in `tabfile.py`. A `project.Tab` (its doc, manifest entry, sync state, name and body in the doc) replaces the five loose arguments the sync functions passed around.
+
+Tests: 257 (218 before), line coverage 92.9% (89.1% before). The fake server (`tests/fakedocs.py`) now stores a tab as the XML the real one writes, with lists, marks, links, tables, code, quotes and chips, ids and hashes on every block, and behaves as the real one did on 2026-10-15: one paragraph replaced by one line keeps its block, a stale `ifHash` and a replace with no guard are refused, a stale `ifRev` alone is not, `set` with null removes an attribute, `move` joins table rows, a link to a path is dropped. It is checked against XML recorded from the server for 57 markdown cases and against those probes (`tests/fixtures/server_xml.json`). New tests push every kind of block whole and piece by piece and read it back verified, send a table larger than one write in parts that join one table, cover the report's output in a terminal and in a pipe, and the connector calls of `mcp.py`.
+
 ## 4.1.0 — 2026-10-15
 
 A full review of 4.0.0 by five agents (design, sync correctness, code quality, tests, hooks and texts) found these problems; each one marked "reproduced" was reproduced against the fake server before the fix, and each fix has a test.

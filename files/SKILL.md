@@ -1,5 +1,5 @@
 ---
-name: docs-local
+name: docs-local-files
 description: In this project, all work with claude.ai Docs goes through docs-local. Each doc is local markdown files, and docsync syncs them with the doc. You read, change and make docs, tabs and diagrams only as these files. The Docs tools here only read comments and reply to them. Load this skill before any work with a doc here. When you change code, update the docs here that describe it, in the same task.
 user-invocable: false
 ---

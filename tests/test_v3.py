@@ -5,6 +5,7 @@ import json, os, types, unittest
 import support
 from support import FakeDocs, Sandbox
 from docsynclib import files, hooks, importer, manifest, mcp, output, projects, sync, textio
+from docsynclib.output import Report
 
 
 class Project(Sandbox):
@@ -32,9 +33,9 @@ class Project(Sandbox):
         return textio.load_json("docsync.json")
 
     def run_sync(self, mode="sync"):
-        output.EVENTS.clear()
-        sync.cmd_sync(self.args, mode)
-        return [(e["kind"], e["path"]) for e in output.EVENTS]
+        self.report = Report(json=True)
+        sync.cmd_sync(os.getcwd(), self.args, mode, self.report)
+        return [(e.kind, e.path) for e in self.report.events]
 
 
 class Migration(Project):
@@ -49,11 +50,11 @@ class Migration(Project):
             "name": "1 Intro", "node": "n-t1", "base": "1-intro", "rev": 1, "hash": "h", "h1": "1 Intro",
             "widgets": {"w1": {"file": "1-intro.widget-w1.jsx", "pub": 2, "hash": "c"}}}}}))
         textio.write(".docsync-last.json", json.dumps({"rc": 0}))
-        cfg = manifest.load()
+        cfg = manifest.load(os.getcwd())
         self.assertEqual(cfg["docs"], {"hld": {"id": "D1", "name": "HLD", "dir": "docs/hld",
                                                "tabs": [{"id": "t1", "file": "docs/hld/1-intro.md"}]}})
         self.assertEqual((cfg["schema"], cfg["conflicts"]), (3, "merge"))
-        st = files.load_state()["docs"]["hld"]
+        st = files.Files(os.getcwd()).load_state()["docs"]["hld"]
         self.assertEqual(st["tabs"]["t1"]["widgets"], {"w1": {"pub": 2, "hash": "c"}})
         self.assertEqual(sorted(os.listdir(".docsync/hld")),
                          ["1-intro.blocks.json", "1-intro.widget-new-x.jsx", "1-intro.widget-w1.jsx"])
@@ -202,7 +203,7 @@ class Pictures(Project):
         self.assertEqual(self.run_sync(), [])
         textio.write("docs/d/1-intro.md", textio.read("docs/d/1-intro.md").replace("hello", "hello there"))
         self.assertEqual(self.run_sync(), [("pushed", "1-intro.md")])
-        self.assertIn("verified", output.EVENTS[-1]["detail"])
+        self.assertIn("verified", self.report.events[-1].detail)
         self.assertIn("ref='node/w7'", self.fake.tabs["t1"]["xml"])
 
     def test_without_a_picture_the_chip_stays(self):
@@ -226,7 +227,7 @@ class Links(Project):
         textio.write("docs/d/2-more.md", "# 2 More\n\nsee [1 Intro](1-intro.md) and here\n")
         self.assertEqual(self.run_sync(), [("pushed", "2-more.md")])
         self.assertIn("<mention ref='file/t1'", self.fake.tabs["t2"]["xml"])
-        self.assertIn("verified", output.EVENTS[-1]["detail"])
+        self.assertIn("verified", self.report.events[-1].detail)
 
 
 class Import(Project):
@@ -239,14 +240,18 @@ class Import(Project):
         found = importer.scan(os.getcwd())
         self.assertEqual([f["file"] for f in found], ["README.md", "docs/guide.md"])
         self.assertEqual(found[0]["links"], ["docs/guide.md"])
-        self.assertEqual(importer.check("docs/guide.md"), ["frontmatter", "HTML"])
-        self.assertEqual(importer.check("README.md"), [])
+        self.assertEqual(importer.check(os.getcwd(), "docs/guide.md"), ["frontmatter", "HTML"])
+        self.assertEqual(importer.check(os.getcwd(), "README.md"), [])
         self.fake.tabs.clear()
-        output.EVENTS.clear()
-        importer.cmd_import(types.SimpleNamespace(scan=False, check=False, name=None, files=["README.md"]))
+        report = Report(json=True)
+        importer.cmd_import(types.SimpleNamespace(scan=False, check=False, name=None, files=["README.md"]), report)
         doc = self.cfg()["docs"]["readme"]
         self.assertEqual((doc["id"], doc["tabs"]), ("D-new", [{"id": "t-new", "file": "README.md"}]))
-        self.assertIn("see [guide](docs/guide.md)", self.fake.tabs["t-new"]["xml"])  # the fake keeps links as text
+        # The server drops a link to a path that is not a tab (2026-10-15): the doc keeps its text, and the push says
+        # that the doc differs. --check does not list such links yet.
+        self.assertEqual(self.fake.text("t-new"), "# Readme\n\nsee guide\n")
+        self.assertEqual((report.events[-1].kind, report.events[-1].path), ("warn", "README.md"))
+        self.assertIn("DIFFERS", report.events[-1].detail)
 
 
 class Outputs(Project):
@@ -309,7 +314,7 @@ class DocGone(Project):
         for answer in ({"verdict": "?", "raw": "Error: something"}, {"verdict": "deny", "reason": "rate_limited"}):
             self.refuse(answer)
             self.assertEqual(self.run_sync(), [("warn", "docs/d")])
-            self.assertIn("could not be read", output.EVENTS[-1]["detail"])
+            self.assertIn("could not be read", self.report.events[-1].detail)
             self.assertIn("d", self.cfg()["docs"])
             self.assertTrue(os.path.exists("docs/d/1-intro.md"))
 
@@ -318,10 +323,12 @@ class HookExit(unittest.TestCase):
     def test_the_hook_exits_0_even_after_a_conflict(self):
         import subprocess, sys
         code = ("import sys, json; sys.path.insert(0, %r)\n"
-                "from docsynclib import cli, hooks, output as out\n"
-                "hooks.stop_hook = lambda e: (out.ev('conflict', 'x.md', 'changed locally and in the doc'), "
+                "from docsynclib import cli, hooks\n"
+                "from docsynclib.output import Report\n"
+                "r = Report(json=True)\n"
+                "hooks.stop_hook = lambda e: (r.ev('conflict', 'x.md', 'changed locally and in the doc'), "
                 "{'decision': 'block', 'reason': 'merge'})[1]\n"
-                "cli.main(['hook'])\n") % support.SCRIPTS
+                "cli.main(['hook'], r)\n") % support.SCRIPTS
         r = subprocess.run([sys.executable, "-c", code], input='{"hook_event_name": "Stop"}', capture_output=True,
                            text=True)
         self.assertEqual(r.returncode, 0)
@@ -418,12 +425,12 @@ class Paths(Project):
         os.rename("docs/d/1-intro.md", "docs/d/readme.md")
         textio.write("docsync.json", json.dumps(cfg))
         self.assertEqual(self.run_sync(), [("warn", "docs/d")])
-        self.assertIn("same name", output.EVENTS[-1]["detail"])
+        self.assertIn("same name", self.report.events[-1].detail)
 
     def test_a_hand_rename_of_a_file_with_chips_keeps_its_tab(self):
         os.makedirs(".docsync/d", exist_ok=True)
         textio.write("docs/d/3-notes.md", "# 3 Notes\n\nsee <?claude block c1?>\n")
-        textio.write(".docsync/d/3-notes.blocks.json", '{"c1": {"type": "embed", "ref": "node/w1"}}')
+        textio.write(".docsync/d/3-notes.blocks.json", '{"c1": {"type": "date", "value": "2026-10-15"}}')
         self.run_sync()
         os.rename("docs/d/3-notes.md", "docs/d/3-other-words.md")
         self.run_sync()
@@ -434,7 +441,7 @@ class Paths(Project):
 class ImportCheck(Project):
     def test_code_is_not_a_loss(self):
         textio.write("a.md", "# A\n\nuse `__init__`, `List<int>` and `\\(a\\)`\n\n```\n+ added\n---\n<div>\n```\n")
-        self.assertEqual(importer.check("a.md"), [])
+        self.assertEqual(importer.check(os.getcwd(), "a.md"), [])
 
     def test_each_loss_is_found(self):
         cases = {"---\nx: 1\n---\n# A\n": "frontmatter", "a <div>b</div>\n": "HTML", "a[^1]\n": "footnotes",
@@ -443,7 +450,7 @@ class ImportCheck(Project):
                  "+ item\n": "+ or * bullets", "$$x$$\n": "math"}
         for text, what in cases.items():
             textio.write("a.md", text)
-            self.assertTrue(any(l.startswith(what) for l in importer.check("a.md")), (text, importer.check("a.md")))
+            self.assertTrue(any(l.startswith(what) for l in importer.check(os.getcwd(), "a.md")), (text, importer.check(os.getcwd(), "a.md")))
 
 
 class Inline(unittest.TestCase):
@@ -469,17 +476,20 @@ class Cli(Project):
     def test_sync_json_and_exit_codes(self):
         from docsynclib import cli
         projects.register(".")
+        import contextlib, io
         def run(*a):
-            output.EVENTS.clear(); output.STATS.clear(); output.CONFLICTS = 0; cli.RESULT.clear()
-            try:
-                cli.main(["sync", "--json", *a])
-            except SystemExit as e:
-                return e.code
-        self.assertEqual(run(), 0)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                try:
+                    cli.main(["sync", "--json", *a], Report(json=True, stream=buf))
+                except SystemExit as e:
+                    return e.code, json.loads(buf.getvalue())
+        self.assertEqual(run()[0], 0)
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhere\n")
         self.fake.edit("t1", "# 1 Intro\n\nthere")
-        self.assertEqual(run(), 2)
-        self.assertEqual(cli.RESULT[-1]["conflict"], 1)
+        code, doc = run()
+        self.assertEqual((code, doc["conflicts"], doc["projects"][-1]["conflict"]), (2, 1, 1))
+        self.assertEqual(doc["events"][-1]["kind"], "conflict")
 
 
 class LargeTab(Project):
@@ -494,7 +504,7 @@ class LargeTab(Project):
             self.assertEqual(self.run_sync(), [("created", "2-big.md")])
             new = next(k for k, t in self.fake.tabs.items() if t["name"] == "2 Big")
             self.assertEqual(self.fake.text(new), text)
-            self.assertIn("verified", output.EVENTS[-1]["detail"])
+            self.assertIn("verified", self.report.events[-1].detail)
         finally:
             write.CAP, edits.CAP = saved
 
@@ -537,12 +547,12 @@ class HookDetails(Project):
                 m = textio.load_json(".docsync/push.json")
                 m["again"] = True
                 textio.write(".docsync/push.json", json.dumps(m))
-            return 0, [], []
+            return 0, [], [], Report(json=True)
         saved = hooks.sync_now
         hooks.sync_now = fake_sync
         try:
             textio.write(".docsync/push.json", json.dumps({"running": True, "started": 1}))
-            hooks.sync_background(None)
+            hooks.sync_background()
         finally:
             hooks.sync_now = saved
         self.assertEqual(len(calls), 2)
@@ -558,6 +568,69 @@ class Guard(Project):
         self.assertIsNotNone(claude.decide(call))
         call["tool_input"]["container"]["id"] = "other-doc"
         self.assertIsNone(claude.decide(call))
+
+
+class RootNotCwd(Project):
+    """A sync, the hooks and the commands find every file from the project root, whatever the working folder."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = os.getcwd()
+        os.makedirs(self.path("elsewhere"))
+        os.chdir(self.path("elsewhere"))
+
+    def sync_root(self, mode="sync"):
+        self.report = Report(json=True)
+        sync.cmd_sync(self.root, self.args, mode, self.report)
+        return [(e.kind, e.path) for e in self.report.events]
+
+    def test_a_sync_from_another_folder_writes_only_in_the_project(self):
+        self.assertEqual(self.sync_root(), [("pulled", "1-intro.md")])
+        self.assertEqual(textio.read(os.path.join(self.root, "docs/d/1-intro.md")), "# 1 Intro\n\nhello\n")
+        textio.write(os.path.join(self.root, "docs/d/1-intro.md"), "# 1 Intro\n\nfrom afar\n")
+        self.assertEqual(self.sync_root(), [("pushed", "1-intro.md")])
+        self.assertIn("from afar", self.fake.tabs["t1"]["xml"])
+        self.assertEqual(os.listdir("."), [])  # nothing in the working folder
+        self.assertEqual(os.getcwd(), self.path("elsewhere"))
+
+    def test_the_stop_hook_does_not_change_the_working_folder(self):
+        projects.register(self.root)
+        projects.set_mode(self.root, "turn")
+        self.sync_root()
+        textio.write(os.path.join(self.root, "docs/d/1-intro.md"), "# 1 Intro\n\nfrom the hook\n")
+        self.assertIsNone(hooks.stop_hook({"cwd": self.root}))
+        self.assertIn("from the hook", self.fake.tabs["t1"]["xml"])
+        self.assertEqual(os.getcwd(), self.path("elsewhere"))
+        self.assertEqual(os.listdir("."), [])
+
+    def test_tab_commands_take_paths_from_the_working_folder_and_write_the_root_manifest(self):
+        from docsynclib import cli
+        projects.register(self.root)
+        self.sync_root()
+        os.chdir(os.path.join(self.root, "docs"))
+        textio.write("d/2-child.md", "# 2 Child\n\nx\n")
+        with self.assertRaises(SystemExit):
+            cli.main(["tab", "add", "d/2-child.md", "--parent", "d/1-intro.md"])
+        cfg = lambda: textio.load_json(os.path.join(self.root, "docsync.json"))
+        self.assertEqual(cfg()["docs"]["d"]["tabs"][-1], {"id": None, "file": "docs/d/2-child.md", "parent": "t1"})
+        with self.assertRaises(SystemExit):
+            cli.main(["project", "conflicts", "local"])
+        self.assertEqual(cfg()["conflicts"], "local")
+        self.assertEqual(os.getcwd(), os.path.join(self.root, "docs"))
+
+
+class Exits(Project):
+    def test_a_warning_in_any_project_makes_the_exit_code_1(self):
+        r = Report(json=True)
+        r.begin_project("a")
+        r.ev("warn", "x.md", "not synced")
+        r.end_project()
+        r.begin_project("b")
+        r.ev("pushed", "y.md")
+        self.assertEqual(r.end_project(), {"pushed": 1})  # each project counts its own
+        self.assertEqual(r.exit_code(), 1)
+        r.ev("conflict", "z.md")
+        self.assertEqual(r.exit_code(), 2)
 
 
 if __name__ == "__main__":

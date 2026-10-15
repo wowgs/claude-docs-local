@@ -51,14 +51,15 @@ differently); 2 conflicts.
 """
 import argparse, json, os, platform, re, shutil, sys
 
-from . import bridge, importer, manifest, output as out
+from . import bridge, importer, manifest
 from .claude import (edit_json, FILES, hide, installed, lock, PLUGIN, project_settings, turn_off, turn_on, unhide,
                      unlock, user_settings)
 from .errors import RunError
-from .files import locked, posix, slug
+from .files import Files, locked, posix, slug
 from .hooks import hook, hook_wake, sync_background
-from .manifest import CONFIG, CONFLICTS
+from .manifest import CONFLICTS
 from .mcp import call
+from .output import COUNTED, Report
 from .projects import (load_user, mode_of, MODES, project_manifest, project_name, project_of, project_state, projects,
                        save_user, set_mode, targets, user_config)
 from .push import ARTIFACT
@@ -66,7 +67,6 @@ from .sync import cmd_sync
 from .textio import load_json, read, write
 
 HOOKS = ("hook", "hook-wake", "sync-background", "bridge")  # run by Claude Code or the hooks, not by people
-RESULT = []
 
 
 def doc_id_from(link):
@@ -77,12 +77,11 @@ def doc_id_from(link):
     return m.group(1)
 
 
-def doc_add(args):
+def doc_add(args, report):
     root = project_of(os.getcwd()) or os.path.realpath(os.getcwd())
-    os.chdir(root)
-    out.CTX["project"] = project_name(root)
+    report.project = project_name(root)
     doc_id = doc_id_from(args.link)
-    out.status("reading the doc")
+    report.status("reading the doc")
     o = call("read", {"ref": {"object": "project", "id": doc_id}}, soft=True)
     if o.get("verdict") != "allow":
         sys.exit(f"cannot read that doc (deleted, no access, or not a Claude Doc): {args.link}")
@@ -94,48 +93,47 @@ def doc_add(args):
             sys.exit(f"already set up as {k} ({manifest.doc_dir(k, v)})")
     key = manifest.unique(slug(os.path.basename((args.dir or "").rstrip("/")) or name), cfg["docs"])
     d = posix(args.dir or os.path.join(manifest.DOCS, key))
-    if any(manifest.doc_dir(k, v) == d for k, v in cfg["docs"].items()) or (os.path.exists(d) and os.listdir(d)):
+    if any(manifest.doc_dir(k, v) == d for k, v in cfg["docs"].items()) or Files(root).listdir(d):
         sys.exit(f"{d} is already used; pass another folder: docsync doc add <link> <dir>")
     cfg["docs"][key] = {"id": doc_id, "name": name, "dir": d, "tabs": []}
-    manifest.save(cfg)
-    out.ev("created", d, f"doc «{name}» set up")
+    manifest.save(root, cfg)
+    report.ev("created", d, f"doc «{name}» set up")
     args.dirs, args.force = [key], False
-    cmd_sync(args, "pull")
-    out.say(out.summary(out.STATS, "doc"))
-    out.say(f"Doc key: {key}; its tabs' chips, diagram code and pictures are in .docsync/{key}/.")
-    out.say(f"Claude: open the doc once with the Artifact tool, action \"open\", url {ARTIFACT + doc_id}, so it shows "
-            "in this session's Outputs.")
+    cmd_sync(root, args, "pull", report)
+    report.say(report.summary("doc"))
+    report.say(f"Doc key: {key}; its tabs' chips, diagram code and pictures are in .docsync/{key}/.")
+    report.say(f"Claude: open the doc once with the Artifact tool, action \"open\", url {ARTIFACT + doc_id}, so it "
+               "shows in this session's Outputs.")
 
 
-def doc_list(args):
+def doc_list(args, report):
     root = project_of(os.getcwd())
     if not root:
         sys.exit("not in a project: turn it on with /docs-local in Claude Code, or docsync project use")
-    os.chdir(root)
-    cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else {"docs": {}}
+    cfg = manifest.load(root, report) if manifest.exists(root) else {"docs": {}}
     for k, v in cfg["docs"].items():
-        out.ev("info", manifest.doc_dir(k, v), f"{v.get('name') or k} {v.get('id') or '(new, not created yet)'}"
-               f" · {len(v.get('tabs', []))} tabs")
+        report.ev("info", manifest.doc_dir(k, v), f"{v.get('name') or k} {v.get('id') or '(new, not created yet)'}"
+                  f" · {len(v.get('tabs', []))} tabs")
 
 
 def in_project():
+    """(project root, the working folder, the project's manifest); the paths the user gave are relative to the
+    working folder, the manifest's to the root."""
     root = project_of(os.getcwd())
     if not root:
         sys.exit("not in a project: turn it on with /docs-local in Claude Code, or docsync project use")
-    here = os.getcwd()
-    os.chdir(root)
-    return root, here, project_manifest(root)
+    return root, os.getcwd(), project_manifest(root)
 
 
 def tab_file(root, here, path):
     return posix(os.path.relpath(os.path.abspath(os.path.join(here, path)), root))
 
 
-def tab_add(args):
+def tab_add(args, report):
     """A new tab from a file: an entry in the manifest; the next sync makes the tab."""
     root, here, cfg = in_project()
     f = tab_file(root, here, args.file)
-    if not os.path.exists(f):
+    if not Files(root).exists(f):
         sys.exit(f"{f}: no such file")
     taken = manifest.mapped(cfg)
     if f in taken:
@@ -152,7 +150,7 @@ def tab_add(args):
     if args.parent:
         e["parent"] = parent_id(cfg, key, tab_file(root, here, args.parent))
     cfg["docs"][key]["tabs"].append(e)
-    manifest.save(cfg)
+    manifest.save(root, cfg)
     print(json.dumps({"doc": key, **e}, ensure_ascii=False))
 
 
@@ -163,7 +161,7 @@ def parent_id(cfg, key, path):
     return t["id"]
 
 
-def tab_parent(args):
+def tab_parent(args, report):
     """Put a tab under another tab of its doc, or at the top; the next sync moves it in the doc."""
     root, here, cfg = in_project()
     f = tab_file(root, here, args.file)
@@ -177,36 +175,37 @@ def tab_parent(args):
         e["parent"] = parent
     else:
         e.pop("parent", None)
-    manifest.save(cfg)
+    manifest.save(root, cfg)
     print(json.dumps({"doc": key, **e}, ensure_ascii=False))
 
 
-def doc_rename(args):
+def doc_rename(args, report):
     root, here, cfg = in_project()
     if args.key not in cfg["docs"]:
         sys.exit(f"no doc {args.key} (keys: " + ", ".join(cfg["docs"]) + ")")
     cfg["docs"][args.key]["name"] = args.name
-    manifest.save(cfg)
+    manifest.save(root, cfg)
     print(json.dumps({"doc": args.key, "name": args.name}, ensure_ascii=False))
 
 
-def project_rename(args):
+def project_rename(args, report):
     root, here, cfg = in_project()
     cfg["name"] = args.name
-    manifest.save(cfg)
+    manifest.save(root, cfg)
     print(json.dumps({"root": root, "name": args.name}, ensure_ascii=False))
 
 
-def project_list(args):
+def project_list(args, report):
     ps = projects()
     for r in ps:
         ok = os.path.exists(r)
-        out.ev("info" if ok else "warn", r.replace(os.path.expanduser("~"), "~", 1), "local docs" if ok else "missing")
+        report.ev("info" if ok else "warn", r.replace(os.path.expanduser("~"), "~", 1),
+                  "local docs" if ok else "missing")
     if not ps:
-        out.say("no projects yet")
+        report.say("no projects yet")
 
 
-def project_check(args):
+def project_check(args, report):
     """For /docs-local and setup: the state of the current folder, one word plus the project root, and whether
     setup ran."""
     state, root = project_state(os.getcwd())
@@ -215,7 +214,7 @@ def project_check(args):
     print(json.dumps({"state": state, "root": root, "setup": load_user().get("sync") in MODES}))
 
 
-def project_use(args):
+def project_use(args, report):
     path = args.path or os.getcwd()
     root = project_of(path) or os.path.realpath(path)
     turn_on(root)
@@ -224,7 +223,7 @@ def project_use(args):
     print(json.dumps({"state": "local", "root": root, "mode": mode_of(root)}))
 
 
-def project_mode(args):
+def project_mode(args, report):
     """This project's own sync mode, or the default one again."""
     root = project_of(args.path or os.getcwd())
     if not root:
@@ -235,19 +234,13 @@ def project_mode(args):
 
 def set_conflicts(root, conflicts):
     """The project's "conflicts" in its docsync.json (made when it has none yet)."""
-    path = os.path.join(root, CONFIG)
-    here = os.getcwd()
-    os.chdir(root)
-    try:
-        cfg = project_manifest(root)
-        cfg["conflicts"] = conflicts
-        manifest.save(cfg)
-    finally:
-        os.chdir(here)
-    return path
+    cfg = project_manifest(root)
+    cfg["conflicts"] = conflicts
+    manifest.save(root, cfg)
+    return manifest.path_of(root)
 
 
-def project_conflicts(args):
+def project_conflicts(args, report):
     """What a sync does with a tab changed on both sides: Claude merges, or the local file wins."""
     root = project_of(os.getcwd())
     if not root:
@@ -256,7 +249,7 @@ def project_conflicts(args):
     print(json.dumps({"root": root, "conflicts": args.conflicts}))
 
 
-def project_remove(args):
+def project_remove(args, report):
     """Local docs off for this project: Claude Code settings back, project out of the config; files stay."""
     root = project_of(args.path or os.getcwd())
     if not root:
@@ -325,7 +318,7 @@ def setup_scan():
     print(json.dumps({"projects": found, "note": note}, ensure_ascii=False, indent=1))
 
 
-def setup(args):
+def setup(args, report):
     """Everything setup does after the user's answers, then a check of the result. Prints one JSON report:
     `ok`, what is in place, `todo` (what only the user can do) and `errors`. Safe to run again.
     `setup scan` instead lists the folders to ask the user about."""
@@ -376,7 +369,7 @@ def setup(args):
         sys.exit(1)
 
 
-def uninstall(args):
+def uninstall(args, report):
     """Remove what docsync put outside the skill folder; the docs and their files stay."""
     removed = []
     link = os.path.join(bin_dir(), "docsync")
@@ -396,48 +389,38 @@ def uninstall(args):
         shutil.rmtree(os.path.dirname(p))
         removed.append(os.path.dirname(p))
     for r in removed:
-        out.say(f"removed {r}")
-    out.say("Left as they are: the docs' local files and each project's docsync.json. To finish: "
-            f"claude plugin uninstall {FILES}; claude plugin uninstall {PLUGIN}")
+        report.say(f"removed {r}")
+    report.say("Left as they are: the docs' local files and each project's docsync.json. To finish: "
+               f"claude plugin uninstall {FILES}; claude plugin uninstall {PLUGIN}")
 
 
-def run_sync(args):
-    roots = [r for r in targets(os.getcwd()) if os.path.exists(os.path.join(r, CONFIG))]
+def run_sync(args, report):
+    """sync, status, pull, push over the projects of targets(), one block of output each. Returns, per project,
+    its name, root and counts."""
+    roots = [r for r in targets(os.getcwd()) if manifest.exists(r)]
     if not roots:
         sys.exit("no projects with docs: turn one on with /docs-local in Claude Code")
-    total = {}
+    total, result = {}, []
     for n, root in enumerate(roots):
-        os.chdir(root)
-        if n and not out.JSON:
-            print()
-        out.STATS.clear()
-        out.CTX["project"] = project_name(root)
-        out.CTX["action"] = None
-        out.BLOCK.update(shown=0, done=None)
-        out.BUF = []
-        out.redraw()
+        if n and not report.json:
+            report.say()
+        report.begin_project(project_name(root))
         try:
-            cmd_sync(args, args.cmd)
-            out.doc_end()
+            cmd_sync(root, args, args.cmd, report)
         finally:
-            out.BLOCK["done"] = "" if args.cmd == "status" else "  " + out.summary(out.STATS, "doc")
-            out.redraw()
-            lines, out.BUF = out.BUF, None
-        if not out.TTY:
-            out.say(out.paint("▸ " + out.CTX["project"], "1") + out.BLOCK["done"])
-            for line in lines:
-                out.say(line)
-        for k, v in out.STATS.items():
+            st = report.end_project(summary=args.cmd != "status")
+        for k, v in st.items():
             total[k] = total.get(k, 0) + v
-        RESULT.append({"project": out.CTX["project"], "root": root,
-                       **{k: out.STATS[k] for k in ("docs", "checked") + out.COUNTED if out.STATS.get(k)}})
-    if out.JSON:
-        print(json.dumps({"projects": RESULT, "events": out.EVENTS, "conflicts": out.CONFLICTS},
+        result.append({"project": report.project, "root": root,
+                       **{k: st[k] for k in ("docs", "checked") + COUNTED if st.get(k)}})
+    if report.json:
+        print(json.dumps({"projects": result, "events": report.as_json(), "conflicts": report.conflicts},
                          ensure_ascii=False, indent=1))
-    if len(roots) > 1 and args.cmd != "status" and not out.JSON:
-        print()
+    if len(roots) > 1 and args.cmd != "status" and not report.json:
+        report.say()
         total["projects"] = len(roots)
-        out.say(out.summary(total, "project"))
+        report.say(report.summary("project", total))
+    return result
 
 
 def parser():
@@ -502,12 +485,12 @@ def parser():
 
 def under_lock(fn):
     """A command that writes the manifest: it holds the project's lock, as a sync does."""
-    def run(args):
+    def run(args, report):
         root = project_of(os.getcwd())
         if not root:
-            return fn(args)
+            return fn(args, report)
         with locked(root):
-            return fn(args)
+            return fn(args, report)
     return run
 
 
@@ -518,31 +501,28 @@ COMMANDS = {
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove,
                 "mode": project_mode, "conflicts": under_lock(project_conflicts), "name": under_lock(project_rename)},
     "setup": {None: setup},
-    "hook": {None: hook},
-    "hook-wake": {None: hook_wake},
-    "sync-background": {None: sync_background},
-    "bridge": {None: lambda args: bridge.serve()},
+    "hook": {None: lambda args, report: hook()},
+    "hook-wake": {None: lambda args, report: hook_wake()},
+    "sync-background": {None: lambda args, report: sync_background()},
+    "bridge": {None: lambda args, report: bridge.serve()},
     "uninstall": {None: uninstall},
 }
 
 
-def main(argv=None):
+def main(argv=None, report=None):
+    """Run one command. report: where its events go (by default shown for people, or as JSON with --json)."""
     args = parser().parse_args(argv)
     args.cmd = args.cmd or "sync"
     for k, v in (("dirs", []), ("force", False)):
         if not hasattr(args, k):
             setattr(args, k, v)
-    args.config = CONFIG
-    if args.cmd in ("sync", "status", "pull", "push"):
-        out.JSON = getattr(args, "json", False)
-        if out.JSON:
-            out.TTY = False
+    report = report or Report(json=args.cmd in ("sync", "status", "pull", "push") and getattr(args, "json", False))
     try:
-        COMMANDS.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
+        COMMANDS.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args, report)
     except RunError as e:
         sys.exit(f"docsync: {e}")
     finally:
-        out.clear_live()
+        report.clear_live()
     if args.cmd in HOOKS:  # Claude Code reads a hook's JSON on exit 0; hook-wake exits by itself
         sys.exit(0)
-    sys.exit(2 if out.CONFLICTS else 1 if out.STATS.get("warn") else 0)  # see "Exit codes" in the help
+    sys.exit(report.exit_code())  # see "Exit codes" in the help

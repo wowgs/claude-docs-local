@@ -1,11 +1,11 @@
 """Where a project's files are: tab files at the paths of the manifest; docsync's own files under .docsync/ (the
 chips, diagram code and pictures of each tab in .docsync/<doc key>/, the sync state, the background push); the
-trash. Paths are relative to the project root, which is the working folder."""
+trash. Every path is relative to the project root, as the manifest and the events name it: the functions here only
+make such paths, and Files reads and writes them under one root, whatever the working folder."""
 import contextlib, datetime, json, os, re, shutil
 
-from . import output as out
 from docmodel.compare import sha
-from .textio import load_json, read, save_json, write
+from . import textio
 
 TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
               ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t",
@@ -78,21 +78,6 @@ def base_path(key, file):
     return os.path.join(BASE, key, base(file) + ".json")
 
 
-def load_base(key, file):
-    """The tab as of the last sync: (markdown, chips), or None."""
-    p = base_path(key, file)
-    if not os.path.exists(p):
-        return None
-    b = load_json(p)
-    return b["md"], b["chips"]
-
-
-def save_base(key, file, md, chips):
-    p = base_path(key, file)
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    write(p, json.dumps({"md": md, "chips": chips}, ensure_ascii=False))
-
-
 def theirs_path(key, file):
     """The doc's version of a tab in conflict, as its file would show it, for Claude to merge."""
     return os.path.join(svc_dir(key), base(file) + ".from-doc.md")
@@ -102,80 +87,16 @@ def theirs_blocks_path(key, file):
     return os.path.join(svc_dir(key), base(file) + ".from-doc.blocks.json")
 
 
-def own_files(key, file):
-    """The tab's files in .docsync/<doc key>/ (chips, diagram code, pictures, the doc's version in a conflict) and
-    its base in .docsync/base/."""
-    d, pre = svc_dir(key), base(file) + "."
-    names = {pre + "blocks.json", pre + "from-doc.md", pre + "from-doc.blocks.json"}
-    found = [os.path.join(d, f) for f in sorted(os.listdir(d))
-             if f in names or (f.startswith(pre + "widget-") and f.endswith((".jsx", ".png")))] \
-        if os.path.isdir(d) else []
-    return found + ([base_path(key, file)] if os.path.exists(base_path(key, file)) else [])
-
-
-def tab_files(key, file):
-    return [file] + own_files(key, file)
-
-
 def renamed_path(file, name):
     """Where a tab file goes when its tab gets this name: the same folder; the number follows the name, the words stay."""
     return posix(os.path.join(os.path.dirname(file), base_for(name, base(file)) + ".md"))
-
-
-def load_chips(key, file):
-    return json.loads(read_text(blocks_path(key, file)) or "{}")
-
-
-def read_text(p):
-    return read(p) if os.path.exists(p) else None
-
-
-def snapshot(key, file):
-    """The tab file and its chips as they are now: (text, chips json text, their hash). A sync works on one snapshot,
-    so an edit made while it runs is not taken for sent."""
-    text, raw = read_text(file) or "", read_text(blocks_path(key, file)) or ""
-    return text, raw, sha(text, raw)
-
-
-def local_hash(key, file):
-    return snapshot(key, file)[2]
-
-
-def widgets_changed(key, file, t):
-    return [w for w, info in t.get("widgets", {}).items()
-            if sha(read_text(widget_path(key, file, w)) or "") != info["hash"]]
-
-
-def local_changed(key, file, t):
-    return local_hash(key, file) != t["hash"] or bool(widgets_changed(key, file, t))
-
-
-def move_tab_files(key, old, new):
-    """Rename a tab's file and its own files (a file in its doc's folder)."""
-    if os.path.exists(old) and not os.path.exists(new):
-        os.makedirs(os.path.dirname(new) or ".", exist_ok=True)
-        os.replace(old, new)
-    ob, nb = base(old), base(new)
-    for f in own_files(key, old):
-        dst = os.path.join(os.path.dirname(f), nb + os.path.basename(f)[len(ob):])
-        if not os.path.exists(dst):
-            os.replace(f, dst)
-
-
-def keep_copy(path):
-    """A copy of a local file in the trash, before docsync writes over it. Returns the copy's path."""
-    if os.path.exists(path):
-        dst = os.path.join(TRASH, path)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.copy2(path, dst)
-        return dst
 
 
 _held = 0  # how deep this process is in locked(): a command inside another (doc import runs a sync) locks once
 
 
 @contextlib.contextmanager
-def locked(root="."):
+def locked(root):
     """The project's lock, .docsync/lock: one docsync at a time writes the manifest, the state and the tab files
     (a background sync, a sync of the Stop hook, a command in a terminal). Waits for the one running."""
     global _held
@@ -201,51 +122,166 @@ def locked(root="."):
             _held = 0
 
 
-def to_trash(path):
-    if os.path.exists(path):
-        dst = os.path.join(TRASH, path)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        os.replace(path, dst)
-        return dst
+class Files:
+    """A project's files under its root, by paths relative to it."""
 
+    def __init__(self, root):
+        self.root = os.path.abspath(root)
 
-# the sync state: .docsync/state.json
+    def abs(self, rel):
+        return os.path.join(self.root, rel)
 
-def load_state():
-    """{"schema": 2, "docs": {"<doc key>": {"id": "<doc id>", "tabs": {"<tab id>": {"name", "node", "rev", "hash",
-    "widgets": {"<widget id>": {"pub", "hash"}}, "h1", "dhash", "fmt", "parent", "conflict_rev"}}}}}"""
-    st = load_json(STATE) if os.path.exists(STATE) else {}
-    st.setdefault("schema", 2)
-    st.setdefault("docs", {})
-    return st
+    # plain files
 
+    def exists(self, rel):
+        return os.path.exists(self.abs(rel))
 
-def save_state(st):
-    os.makedirs(SVC, exist_ok=True)
-    save_json(STATE, st)
-    ensure_gitignore()
+    def isdir(self, rel):
+        return os.path.isdir(self.abs(rel))
 
+    def listdir(self, rel):
+        """The names in a folder, sorted; none when it does not exist."""
+        return sorted(os.listdir(self.abs(rel))) if self.isdir(rel) else []
 
-def in_git():
-    d = os.path.abspath(".")
-    while True:
-        if os.path.exists(os.path.join(d, ".git")):
-            return True
-        up = os.path.dirname(d)
-        if up == d:
+    def read(self, rel):
+        """The file's text, or None when there is no file."""
+        return textio.read(self.abs(rel)) if self.exists(rel) else None
+
+    def write(self, rel, text):
+        """The whole file at once (textio.write), its folder made when missing."""
+        os.makedirs(os.path.dirname(self.abs(rel)), exist_ok=True)
+        textio.write(self.abs(rel), text)
+
+    def write_bytes(self, rel, data):
+        os.makedirs(os.path.dirname(self.abs(rel)), exist_ok=True)
+        with open(self.abs(rel), "wb") as f:
+            f.write(data)
+
+    def load_json(self, rel):
+        return textio.load_json(self.abs(rel))
+
+    def save_json(self, rel, obj):
+        os.makedirs(os.path.dirname(self.abs(rel)), exist_ok=True)
+        textio.save_json(self.abs(rel), obj)
+
+    def remove(self, rel):
+        if self.exists(rel):
+            os.remove(self.abs(rel))
+
+    def move(self, src, dst):
+        """Rename a file, its new folder made when missing."""
+        os.makedirs(os.path.dirname(self.abs(dst)), exist_ok=True)
+        os.replace(self.abs(src), self.abs(dst))
+
+    def locked(self):
+        return locked(self.root)
+
+    # a tab's files
+
+    def own_files(self, key, file):
+        """The tab's files in .docsync/<doc key>/ (chips, diagram code, pictures, the doc's version in a conflict)
+        and its base in .docsync/base/."""
+        d, pre = svc_dir(key), base(file) + "."
+        names = {pre + "blocks.json", pre + "from-doc.md", pre + "from-doc.blocks.json"}
+        found = [os.path.join(d, f) for f in self.listdir(d)
+                 if f in names or (f.startswith(pre + "widget-") and f.endswith((".jsx", ".png")))]
+        return found + ([base_path(key, file)] if self.exists(base_path(key, file)) else [])
+
+    def tab_files(self, key, file):
+        return [file] + self.own_files(key, file)
+
+    def load_chips(self, key, file):
+        return json.loads(self.read(blocks_path(key, file)) or "{}")
+
+    def snapshot(self, key, file):
+        """The tab file and its chips as they are now: (text, chips json text, their hash). A sync works on one
+        snapshot, so an edit made while it runs is not taken for sent."""
+        text, raw = self.read(file) or "", self.read(blocks_path(key, file)) or ""
+        return text, raw, sha(text, raw)
+
+    def local_hash(self, key, file):
+        return self.snapshot(key, file)[2]
+
+    def widgets_changed(self, key, file, t):
+        return [w for w, info in t.get("widgets", {}).items()
+                if sha(self.read(widget_path(key, file, w)) or "") != info["hash"]]
+
+    def local_changed(self, key, file, t):
+        return self.local_hash(key, file) != t["hash"] or bool(self.widgets_changed(key, file, t))
+
+    def load_base(self, key, file):
+        """The tab as of the last sync: (markdown, chips), or None."""
+        p = base_path(key, file)
+        if not self.exists(p):
+            return None
+        b = self.load_json(p)
+        return b["md"], b["chips"]
+
+    def save_base(self, key, file, md, chips):
+        self.write(base_path(key, file), json.dumps({"md": md, "chips": chips}, ensure_ascii=False))
+
+    def move_tab_files(self, key, old, new):
+        """Rename a tab's file and its own files (a file in its doc's folder)."""
+        if self.exists(old) and not self.exists(new):
+            self.move(old, new)
+        ob, nb = base(old), base(new)
+        for f in self.own_files(key, old):
+            dst = os.path.join(os.path.dirname(f), nb + os.path.basename(f)[len(ob):])
+            if not self.exists(dst):
+                self.move(f, dst)
+
+    # the trash: .docsync-trash/<time>/, with each file at its path in the project
+
+    def keep_copy(self, path):
+        """A copy of a local file in the trash, before docsync writes over it. Returns the copy's path."""
+        if self.exists(path):
+            dst = os.path.join(TRASH, path)
+            os.makedirs(os.path.dirname(self.abs(dst)), exist_ok=True)
+            shutil.copy2(self.abs(path), self.abs(dst))
+            return dst
+
+    def to_trash(self, path):
+        if self.exists(path):
+            dst = os.path.join(TRASH, path)
+            self.move(path, dst)
+            return dst
+
+    # the sync state: .docsync/state.json
+
+    def load_state(self):
+        """{"schema": 2, "docs": {"<doc key>": {"id": "<doc id>", "tabs": {"<tab id>": {"name", "node", "rev",
+        "hash", "widgets": {"<widget id>": {"pub", "hash"}}, "h1", "dhash", "fmt", "parent", "conflict_rev"}}}}}"""
+        st = self.load_json(STATE) if self.exists(STATE) else {}
+        st.setdefault("schema", 2)
+        st.setdefault("docs", {})
+        return st
+
+    def save_state(self, st):
+        """Returns True when it added docsync's lines to the project's .gitignore."""
+        self.save_json(STATE, st)
+        return self.ensure_gitignore()
+
+    def in_git(self):
+        d = self.root
+        while True:
+            if os.path.exists(os.path.join(d, ".git")):
+                return True
+            up = os.path.dirname(d)
+            if up == d:
+                return False
+            d = up
+
+    def ensure_gitignore(self):
+        """docsync's files that belong to this machine stay out of git: added to the project's .gitignore once.
+        Returns True when it added them."""
+        if not self.in_git():
             return False
-        d = up
-
-
-def ensure_gitignore():
-    """docsync's files that belong to this machine stay out of git: added to the project's .gitignore once."""
-    if not in_git():
-        return
-    have = read_text(".gitignore") or ""
-    lines = have.split("\n")
-    missing = [p for p in IGNORE if p not in lines]
-    if missing:
+        have = self.read(".gitignore") or ""
+        lines = have.split("\n")
+        missing = [p for p in IGNORE if p not in lines]
+        if not missing:
+            return False
         sep = "" if not have or have.endswith("\n") else "\n"
         head = "" if IGNORE_HEAD in lines else IGNORE_HEAD + "\n"
-        write(".gitignore", have + sep + head + "\n".join(missing) + "\n")
-        out.ev("info", ".gitignore", "added docsync's own state files")
+        self.write(".gitignore", have + sep + head + "\n".join(missing) + "\n")
+        return True

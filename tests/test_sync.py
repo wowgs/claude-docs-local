@@ -1,9 +1,11 @@
 """cmd_sync against a fake Claude Docs server: what each combination of local and doc changes does."""
-import os, types, unittest
+import os, re, types, unittest
 
 from support import FakeDocs, Sandbox, xml_of
 from docmodel import edits
+from docmodel.tree import top_ids
 from docsynclib import files, manifest, mcp, output, push, sync, textio
+from docsynclib.output import Report
 
 
 class Base(Sandbox):
@@ -19,24 +21,23 @@ class Base(Sandbox):
         os.chdir(self.path("proj"))
         self.write("proj/docsync.json", '{"docs": {"docs/d": {"id": "D1", "name": "Doc"}}}')  # 2.x: moved on read
         self.args = types.SimpleNamespace(config="docsync.json", dirs=[], force=False)
-        manifest.load("docsync.json")
+        manifest.load(os.getcwd())
         os.makedirs(".docsync/d", exist_ok=True)
-        output.EVENTS.clear()
 
     def tearDown(self):
         mcp.call, mcp.read_node = self.saved
         super().tearDown()
 
     def run_sync(self, mode="sync"):
-        output.EVENTS.clear()
-        sync.cmd_sync(self.args, mode)
-        return [(e["kind"], e["path"]) for e in output.EVENTS]
+        self.report = Report(json=True)
+        sync.cmd_sync(os.getcwd(), self.args, mode, self.report)
+        return [(e.kind, e.path) for e in self.report.events]
 
     def local(self, name="1-intro"):
         return textio.read(os.path.join("docs/d", name + ".md"))
 
     def state(self):
-        return files.load_state()["docs"]["d"]["tabs"]["t1"]
+        return files.Files(os.getcwd()).load_state()["docs"]["d"]["tabs"]["t1"]
 
 
 class Sync(Base):
@@ -83,7 +84,7 @@ class Sync(Base):
         self.run_sync()
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhello, local\n")
         self.assertEqual(self.run_sync(), [("pushed", "1-intro.md")])
-        self.assertIn("verified", output.EVENTS[-1]["detail"])
+        self.assertIn("verified", self.report.events[-1].detail)
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello, local\n")
         self.assertEqual(self.run_sync(), [])
 
@@ -91,14 +92,15 @@ class Sync(Base):
         self.fake.edit("t1", "# 1 Intro\n\nhello\n\nkept")
         self.run_sync()
         kept = self.fake.tabs["t1"]["xml"].split("kept")[0].rsplit("<paragraph id='", 1)[1].split("'")[0]
+        before = re.search(r"<paragraph id='%s'[^>]*>.*?</paragraph>" % kept, self.fake.tabs["t1"]["xml"]).group(0)
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhello, local\n\nkept\n\nnew one\n")
         self.fake.calls.clear()
         self.assertEqual(self.run_sync(), [("pushed", "1-intro.md")])
-        self.assertIn("verified", output.EVENTS[-1]["detail"])
+        self.assertIn("verified", self.report.events[-1].detail)
         ops = [op for tool, a in self.fake.calls if tool == "update" for op in a["payload"]["ops"]]
         self.assertEqual([op["op"] for op in ops], ["insert", "replace"])
         self.assertTrue(all(op.get("allowDetach") for op in ops if op["op"] == "replace"))
-        self.assertIn(f"<paragraph id='{kept}'><text>kept</text>", self.fake.tabs["t1"]["xml"])  # untouched
+        self.assertIn(before, self.fake.tabs["t1"]["xml"])  # untouched: the same id and hash
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello, local\n\nkept\n\nnew one\n")
 
     def test_a_rewrite_after_edits_that_landed_uses_the_tab_as_read_after_them(self):
@@ -117,11 +119,12 @@ class Sync(Base):
             self.assertEqual(self.run_sync(), [("pushed", "1-intro.md")])  # not refused for a block it removed itself
         finally:
             edits.plan = real
-        self.assertIn("verified", output.EVENTS[-1]["detail"])
+        self.assertIn("verified", self.report.events[-1].detail)
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello\n\nthird, edited\n")
 
     def test_a_change_the_edits_do_not_make_rewrites_the_tab_whole(self):
         self.run_sync()
+        old = top_ids(self.fake.tabs["t1"]["xml"])
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhello, local\n")
         saved = edits.plan
         edits.plan = lambda *a: (_ for _ in ()).throw(edits.NoPlan("x"))
@@ -129,9 +132,9 @@ class Sync(Base):
             self.assertEqual(self.run_sync(), [("pushed", "1-intro.md")])
         finally:
             edits.plan = saved
-        self.assertIn("verified", output.EVENTS[-1]["detail"])
+        self.assertIn("verified", self.report.events[-1].detail)
         op = [a for tool, a in self.fake.calls if tool == "update"][-1]["payload"]["ops"][0]
-        self.assertEqual((op["op"], op["target"]["ids"], op["allowDetach"]), ("replace", ["p.1", "p.2"], True))
+        self.assertEqual((op["op"], op["target"]["ids"], op["allowDetach"]), ("replace", old, True))
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello, local\n")
 
     def test_a_comment_that_asks_claude_holds_back_only_its_tab(self):
@@ -150,9 +153,9 @@ class Sync(Base):
         self.fake.comment_rows["n-t1"] = [{"seq": 1, "verb": "create", "id": "th-1",
                                            "payload": {"value": {"body": "@Claude fix this"}}}]
         self.assertEqual(self.run_sync(), [("warn", "1-intro.md"), ("pushed", "2-more.md")])
-        held = output.EVENTS[0]
-        self.assertEqual(held["detail"], push.HELD)  # for people: no ids, no comment text
-        self.assertEqual((held["doc_id"], held["asks"]), ("D1", [{"thread": "th-1", "text": "@Claude fix this"}]))
+        held = self.report.events[0]
+        self.assertEqual(held.detail, push.HELD)  # for people: no ids, no comment text
+        self.assertEqual((held.get("doc_id"), held.get("asks")), ("D1", [{"thread": "th-1", "text": "@Claude fix this"}]))
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello\n")
         blocked["on"] = False  # answered in the doc: the next sync sends the tab
         self.assertEqual(self.run_sync(), [("pushed", "1-intro.md")])
@@ -170,7 +173,7 @@ class Sync(Base):
         self.fake.edit("t1", "# 1 Intro\n\ntheirs")
         before = self.fake.tabs["t1"]["xml"]
         self.assertEqual(self.run_sync(), [("conflict", "1-intro.md")])
-        self.assertEqual(output.CONFLICTS, 1)
+        self.assertEqual(self.report.conflicts, 1)
         self.assertEqual(self.local(), "# 1 Intro\n\nmine\n")
         self.assertEqual(self.fake.tabs["t1"]["xml"], before)
 
@@ -280,7 +283,7 @@ class Sync(Base):
         self.run_sync()
         textio.write(".docsync/d/1-intro.widget-w7.jsx", "BROKEN")
         self.assertEqual(self.run_sync(), [("warn", "1-intro.md")])
-        self.assertIn("did not take this code", output.EVENTS[-1]["detail"])
+        self.assertIn("did not take this code", self.report.events[-1].detail)
         self.assertEqual(self.fake.widgets["w7"]["code"], "old")
 
     def test_a_diagram_the_doc_refuses_stops_the_push(self):
@@ -289,7 +292,7 @@ class Sync(Base):
         textio.write(".docsync/d/1-intro.blocks.json", '{"d1": {"type": "embed", "ref": "node/new-x"}}')
         textio.write(".docsync/d/1-intro.widget-new-x.jsx", "BROKEN")
         self.assertEqual(self.run_sync(), [("warn", "1-intro.md")])
-        self.assertIn("did not publish this diagram", output.EVENTS[-1]["detail"])
+        self.assertIn("did not publish this diagram", self.report.events[-1].detail)
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello\n")
 
     def test_a_new_tab_with_its_own_new_diagram(self):
@@ -308,7 +311,7 @@ class Sync(Base):
         textio.write("docs/d/2-more.md", "# 2 More\n\n<?claude block d1?>\n")
         textio.write(".docsync/d/2-more.blocks.json", '{"d1": {"type": "embed", "ref": "node/w9"}}')
         self.assertEqual(self.run_sync(), [("warn", "2-more.md")])
-        self.assertIn("cannot show a diagram of another tab", output.EVENTS[-1]["detail"])
+        self.assertIn("cannot show a diagram of another tab", self.report.events[-1].detail)
 
     def test_a_cell_with_several_paragraphs_holds_back_only_its_tab(self):
         self.fake.add_tab("t2", "2 More", "# 2 More\n\nthere")
@@ -316,14 +319,14 @@ class Sync(Base):
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\n| A |\n| --- |\n| a<br>b |\n")
         textio.write("docs/d/2-more.md", "# 2 More\n\nthere, edited\n")
         self.assertEqual(self.run_sync(), [("warn", "1-intro.md"), ("pushed", "2-more.md")])
-        self.assertIn("not synced: docs/d/1-intro.md, line 5: a table cell", output.EVENTS[0]["detail"])
+        self.assertIn("not synced: docs/d/1-intro.md, line 5: a table cell", self.report.events[0].detail)
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello\n")
 
     def test_a_tab_with_an_element_docsync_cannot_write_holds_back_only_its_tab(self):
         self.fake.add_tab("t2", "2 More", "# 2 More\n\nthere")
         self.fake.tabs["t1"]["xml"] = "<doc><paragraph id='p.1'><text>a</text><widgetish/></paragraph></doc>"
         self.assertEqual(self.run_sync(), [("warn", "1-intro.md"), ("pulled", "2-more.md")])
-        self.assertIn("not synced: the doc has <widgetish> in a paragraph", output.EVENTS[0]["detail"])
+        self.assertIn("not synced: the doc has <widgetish> in a paragraph", self.report.events[0].detail)
 
     def test_a_new_doc_from_local_files(self):
         os.makedirs("docs/n")
@@ -341,7 +344,7 @@ class Sync(Base):
         self.fake.edit("t1", "# 1 Intro\n\ntheirs")
         calls = len(self.fake.calls)
         self.assertEqual(self.run_sync("status"), [("info", "1-intro.md")])
-        self.assertIn("local edits, doc changed", output.EVENTS[-1]["detail"])
+        self.assertIn("local edits, doc changed", self.report.events[-1].detail)
         self.assertTrue(all(tool == "read" for tool, _ in self.fake.calls[calls:]))
 
 
@@ -479,7 +482,7 @@ class StopHook(Base):
         mcp.call = lambda tool, args, soft=False: (
             {"verdict": "deny", "reason": "anchors_affected", "data": {"asking": [{"id": "th-1"}]}}
             if tool == "update" else call(tool, args, soft))
-        saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: self.hooks.sync_background(None)
+        saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: self.hooks.sync_background()
         try:
             self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nbye\n")
             self.assertIsNone(self.stop())  # the Stop hook starts the push (here: runs it at once)
@@ -508,7 +511,7 @@ class StopHook(Base):
         saved = self.hooks.sync_now
         self.hooks.sync_now = lambda root, force=False: 1 / 0
         try:
-            self.hooks.sync_background(None)
+            self.hooks.sync_background()
         finally:
             self.hooks.sync_now = saved
         last = json.load(open(os.path.join(self.root, ".docsync/push.json"), encoding="utf-8"))
@@ -537,7 +540,7 @@ class NothingLost(Base):
         self.run_sync("pull")
         self.assertEqual(self.local(), "# 1 Intro\n\ntheirs\n")
         self.assertEqual(textio.read(os.path.join(files.TRASH, "docs/d/1-intro.md")), "# 1 Intro\n\nmine\n")
-        self.assertIn("local edits kept in", output.EVENTS[-1]["detail"])
+        self.assertIn("local edits kept in", self.report.events[-1].detail)
 
 
 class Decide(unittest.TestCase):

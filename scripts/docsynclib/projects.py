@@ -79,10 +79,9 @@ def default_conflicts():
 
 
 def project_manifest(root):
-    """The project's docsync.json, or a new one: its name from the folder, conflicts from setup's answer. The working
-    folder is the project root."""
-    if os.path.exists(CONFIG):
-        return manifest.load(CONFIG)
+    """The project's docsync.json, or a new one: its name from the folder, conflicts from setup's answer."""
+    if manifest.exists(root):
+        return manifest.load(root)
     return {"schema": manifest.SCHEMA, "name": os.path.basename(root.rstrip(os.sep)) or root,
             "conflicts": default_conflicts(), "docs": {}}
 
