@@ -98,11 +98,11 @@ class Cli(Sandbox):
         self.assertEqual(r.returncode, 1)
         self.assertIn("ask the user", r.stderr)
         self.installed("docs-local@wowgs", "docs-local-files@wowgs")
-        first = self.setup("--mode", "auto")
-        self.assertEqual(first["mode"], "auto")
+        first = self.setup("--mode", "turn")
+        self.assertEqual(first["mode"], "turn")
         self.assertIn("start a new Claude Code session (or run /reload-plugins)", first["todo"])  # plugins load then
         again = self.setup()
-        self.assertEqual(again["mode"], "auto")  # the saved choice
+        self.assertEqual(again["mode"], "turn")  # the saved choice
         self.assertEqual(again["todo"], [])
 
     def test_setup_scan_lists_the_folders_claude_code_has_seen(self):
@@ -118,7 +118,7 @@ class Cli(Sandbox):
     def test_setup_does_everything_and_reports(self):
         self.installed("docs-local@wowgs", "docs-local-files@wowgs")
         proj = self.path("proj")
-        out = self.setup("--mode", "user", "--project", proj)
+        out = self.setup("--mode", "manual", "--project", proj)
         self.assertTrue(out["ok"])
         self.assertEqual(out["errors"], [])
         self.assertEqual(out["plugins"], {"docs-local@wowgs": "9.9.9", "docs-local-files@wowgs": "9.9.9"})
@@ -137,7 +137,7 @@ class Cli(Sandbox):
 
     def test_setup_reports_what_is_missing(self):
         self.installed("docs-local@wowgs")
-        out = self.setup("--mode", "auto", "--project", self.path("nowhere"), ok=False)
+        out = self.setup("--mode", "turn", "--project", self.path("nowhere"), ok=False)
         self.assertFalse(out["ok"])
         self.assertIn("docs-local-files@wowgs is not installed: claude plugin install docs-local-files@wowgs",
                       out["errors"])
@@ -145,7 +145,7 @@ class Cli(Sandbox):
         self.assertIsNone(out["shell"])  # mode auto: no shell command
 
     def test_shell_command_runs_the_installed_plugin(self):
-        out = self.setup("--mode", "user", ok=False)  # nothing installed yet
+        out = self.setup("--mode", "manual", ok=False)  # nothing installed yet
         cmd = out["shell"]["command"]
         r = subprocess.run([cmd, "project", "list"], capture_output=True, text=True, encoding="utf-8", env=dict(os.environ))
         self.assertEqual(r.returncode, 1)
@@ -158,7 +158,7 @@ class Cli(Sandbox):
     def test_setup_keeps_a_foreign_file_or_link(self):
         self.installed("docs-local@wowgs", "docs-local-files@wowgs")
         self.write("bin/docsync", "#!/bin/sh\necho mine\n")
-        out = self.setup("--mode", "user", ok=False)
+        out = self.setup("--mode", "manual", ok=False)
         self.assertIn("is not docsync", out["errors"][0])
         self.assertEqual(textio.read(self.path("bin/docsync")), "#!/bin/sh\necho mine\n")
         os.remove(self.path("bin/docsync"))
@@ -171,7 +171,7 @@ class Cli(Sandbox):
         g = self.path("claude/settings.json")
         self.write("claude/settings.json", '{"model": "x"}')
         self.write("proj/.claude/settings.local.json", '{"permissions": {"deny": ["Bash(rm *)"]}}')
-        self.setup("--mode", "user", "--project", self.path("proj"))
+        self.setup("--mode", "manual", "--project", self.path("proj"))
         self.assertEqual(textio.load_json(g)["enabledPlugins"], {"docs-local-files@wowgs": False})
         self.run_ok("uninstall")
         self.assertEqual(textio.load_json(g), {"model": "x"})

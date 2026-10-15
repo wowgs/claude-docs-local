@@ -1,7 +1,7 @@
 """Import of a project's existing markdown files as Claude Docs. The model proposes which files make which docs, the
 user confirms, and this code does the rest: `--scan` lists the files, `--check` says what in them would not survive
 the doc, and `import FILE...` makes one doc of them (the first file is the main tab). The files stay where they are:
-the manifest maps each tab to its file. Links between files that are tabs become mentions in the doc, and links again
+the manifest maps each tab to its file, and docsync never renames or deletes them (they are outside the doc's folder). Links between files that are tabs become mentions in the doc, and links again
 when the tabs are pulled (docmodel/fileview.py)."""
 import json, os, re, sys
 
@@ -84,7 +84,7 @@ def cmd_import(args):
         print(json.dumps({f: check(f) for f in files}, ensure_ascii=False, indent=1))
         return
     cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else \
-        {"schema": manifest.SCHEMA, "name": os.path.basename(root), "files": "managed", "docs": {}}
+        {"schema": manifest.SCHEMA, "name": os.path.basename(root), "conflicts": "merge", "docs": {}}
     taken = manifest.mapped(cfg)
     for f in files:
         if not os.path.exists(f):

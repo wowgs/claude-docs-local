@@ -13,10 +13,11 @@ TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэю�
 NUM = re.compile(r"^\s*(\d+(?:\.\d+)*)\.?\s+")
 SVC = ".docsync"
 STATE = os.path.join(SVC, "state.json")  # this machine's sync state: not in git
-PUSH = os.path.join(SVC, "push.json")  # the last background push (mode auto-force): not in git
+PUSH = os.path.join(SVC, "push.json")  # the last background sync (conflicts "local"): not in git
 LOCK = os.path.join(SVC, "lock")
 TRASH = os.path.join(".docsync-trash", datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S"))
-IGNORE = ["/.docsync/state.json", "/.docsync/push.json", "/.docsync/lock", "/.docsync-trash/"]
+BASE = os.path.join(SVC, "base")  # each tab as of the last sync, for a merge in a project whose conflicts are "local"
+IGNORE = ["/.docsync/state.json", "/.docsync/push.json", "/.docsync/lock", "/.docsync/base/", "/.docsync-trash/"]
 FMT = 3  # how pull writes a tab's file; a clean tab written by an older format is pulled again
 
 
@@ -71,13 +72,32 @@ def new_widget_path(key, file, name):
     return os.path.join(svc_dir(key), f"{base(file)}.widget-new-{name}.jsx")
 
 
+def base_path(key, file):
+    return os.path.join(BASE, key, base(file) + ".json")
+
+
+def load_base(key, file):
+    """The tab as of the last sync: (markdown, chips), or None."""
+    p = base_path(key, file)
+    if not os.path.exists(p):
+        return None
+    b = load_json(p)
+    return b["md"], b["chips"]
+
+
+def save_base(key, file, md, chips):
+    p = base_path(key, file)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    write(p, json.dumps({"md": md, "chips": chips}, ensure_ascii=False))
+
+
 def own_files(key, file):
-    """The tab's files in .docsync/<doc key>/: chips, diagram code, pictures."""
+    """The tab's files in .docsync/<doc key>/ (chips, diagram code, pictures) and its base in .docsync/base/."""
     d, pre = svc_dir(key), base(file) + "."
-    if not os.path.isdir(d):
-        return []
-    return [os.path.join(d, f) for f in sorted(os.listdir(d))
-            if f == pre + "blocks.json" or (f.startswith(pre + "widget-") and f.endswith((".jsx", ".png")))]
+    out = [os.path.join(d, f) for f in sorted(os.listdir(d))
+           if f == pre + "blocks.json" or (f.startswith(pre + "widget-") and f.endswith((".jsx", ".png")))] \
+        if os.path.isdir(d) else []
+    return out + ([base_path(key, file)] if os.path.exists(base_path(key, file)) else [])
 
 
 def tab_files(key, file):
@@ -102,7 +122,7 @@ def local_changed(key, file, t):
 
 
 def move_tab_files(key, old, new):
-    """Rename a tab's file and its own files (managed files)."""
+    """Rename a tab's file and its own files (a file in its doc's folder)."""
     if os.path.exists(old) and not os.path.exists(new):
         os.makedirs(os.path.dirname(new) or ".", exist_ok=True)
         os.replace(old, new)

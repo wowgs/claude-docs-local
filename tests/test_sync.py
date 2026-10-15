@@ -358,13 +358,15 @@ class StopHook(Base):
         self.hooks, self.root = hooks, os.path.realpath(self.path("proj"))
         projects.register(self.root)
         self.run_sync()
-        self.mode("auto")
+        self.mode("turn", "merge")
 
-    def mode(self, m):
-        from docsynclib import projects
+    def mode(self, when, conflicts=None):
+        from docsynclib import cli, projects
         u = projects.load_user()
-        u["sync"] = m
+        u["sync"] = when
         projects.save_user(u)
+        if conflicts:
+            cli.set_conflicts(self.root, conflicts)
 
     def stop(self, **kw):
         out = self.hooks.stop_hook({"hook_event_name": "Stop", "cwd": self.root, **kw})
@@ -374,7 +376,7 @@ class StopHook(Base):
     def test_nothing_outside_a_project_or_in_mode_user(self):
         self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited\n")
         self.assertIsNone(self.hooks.stop_hook({"hook_event_name": "Stop", "cwd": self.tmp}))
-        self.mode("user")
+        self.mode("manual")
         self.assertIsNone(self.stop())
         self.assertNotIn("edited", self.fake.tabs["t1"]["xml"])
 
@@ -440,13 +442,11 @@ class StopHook(Base):
 
     def test_auto_force_pushes_in_the_background_and_reports_a_failure_later(self):
         import json, subprocess
-        self.mode("auto-force")
+        self.mode("turn", "local")
         started = []
         saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: started.append((a, k))
         try:
-            self.assertIsNone(self.stop())  # nothing local: nothing started
-            self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited\n")
-            self.assertIsNone(self.stop())
+            self.assertIsNone(self.stop())  # after every turn, so that the doc's own changes come down too
             self.assertEqual(started[0][0][0][-1], "push-background")
             self.write("proj/.docsync/push.json", json.dumps({"rc": 1, "problems": ["boom"]}))
             self.assertIn("boom", self.stop()["systemMessage"])
@@ -456,7 +456,7 @@ class StopHook(Base):
 
     def test_auto_force_marks_the_push_and_does_not_start_a_second_one(self):
         import json, subprocess, time
-        self.mode("auto-force")
+        self.mode("turn", "local")
         started = []
         saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: started.append(a)
         try:
@@ -473,7 +473,7 @@ class StopHook(Base):
 
     def test_auto_force_wakes_claude_when_a_comment_holds_a_tab(self):
         import subprocess
-        self.mode("auto-force")
+        self.mode("turn", "local")
         self.fake.comment_rows["n-t1"] = [{"seq": 1, "verb": "create", "id": "th-1",
                                            "payload": {"value": {"body": "@Claude fix this"}}}]
         call = self.fake.call
@@ -494,7 +494,7 @@ class StopHook(Base):
 
     def test_the_wake_hook_waits_for_the_push_of_its_stop_only(self):
         import json, time
-        self.mode("auto-force")
+        self.mode("turn", "local")
         saved, self.hooks.GRACE_S, self.hooks.WAIT_S = (self.hooks.GRACE_S, self.hooks.WAIT_S), 0.05, 0.01
         try:
             self.write("proj/.docsync/push.json", json.dumps({"rc": 1, "problems": ["old"], "started": time.time() - 60}))
@@ -516,10 +516,17 @@ class StopHook(Base):
         self.assertEqual(last["rc"], 1)
         self.assertIn("ZeroDivisionError", last["problems"][0])
 
-    def test_mode_model_becomes_auto(self):
+    def test_an_old_mode_becomes_when_here_and_conflicts_in_the_manifest(self):
+        import json
         from docsynclib import projects
-        self.mode("model")
-        self.assertEqual(projects.load_user()["sync"], "auto")
+        cfg = textio.load_json(os.path.join(self.root, "docsync.json"))
+        cfg.pop("conflicts", None)
+        cfg["schema"] = 2  # as 3.0 left it
+        textio.write(os.path.join(self.root, "docsync.json"), json.dumps(cfg))
+        textio.write(projects.user_config(), json.dumps({"schema": 2, "sync": "auto-force",
+                                                         "projects": {self.root: {}}}))
+        self.assertEqual(projects.load_user()["sync"], "turn")
+        self.assertEqual(textio.load_json(os.path.join(self.root, "docsync.json"))["conflicts"], "local")
 
 
 class NothingLost(Base):

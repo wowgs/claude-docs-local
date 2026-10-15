@@ -2,7 +2,7 @@
 import json, os
 
 from . import mcp, output as out
-from .files import (FMT, TRASH, base, base_for, blocks_path, keep_copy, local_changed, local_hash, own_files, posix,
+from .files import (FMT, TRASH, save_base, base, base_for, blocks_path, keep_copy, local_changed, local_hash, own_files, posix,
                     preview_path, read_text, tab_files, to_trash, widget_path, move_tab_files)
 from .textio import write
 from .widgets import fetch_preview, read_widget
@@ -33,7 +33,7 @@ def write_tab(P, key, file, xml, doc_id):
             fetch_preview(doc_id, wid, preview_path(key, file, wid))
             widgets[wid] = {"pub": v.get("pub"), "hash": sha(v["code"])}
     for f in own_files(key, file):  # diagrams no longer in the tab
-        if ".widget-" in f and not f.endswith(".blocks.json") and \
+        if ".widget-" in f and \
                 os.path.basename(f).split(".widget-", 1)[1].rsplit(".", 1)[0] not in widgets:
             to_trash(f)
     md, blocks = to_file(md, blocks, P.view(key, file))
@@ -44,8 +44,8 @@ def write_tab(P, key, file, xml, doc_id):
 
 
 def follow_rename(P, key, e, name):
-    """The tab was renamed in the doc: its files follow (managed), or stay as they are (kept)."""
-    if P.kept:
+    """The tab was renamed in the doc: its files follow when they are docsync's (in the doc's folder)."""
+    if not P.owned(key, e["file"]):
         return
     old = e["file"]
     new = posix(os.path.join(os.path.dirname(old), base_for(name, base(old)) + ".md"))
@@ -68,6 +68,8 @@ def pull_tab(P, key, e, tab_id, name, node, data=None):
         kept = os.path.join(TRASH, e["file"])
     data = data or mcp.read_node(P.doc(key)["id"], node)
     widgets = write_tab(P, key, e["file"], data["xml"], P.doc(key)["id"])
+    md, chips, _ = to_markdown(data["xml"])
+    save_base(key, e["file"], md, chips)
     dst["tabs"][tab_id] = {"name": name, "node": node, "rev": data["rev"], "hash": local_hash(key, e["file"]),
                            "widgets": widgets, "h1": h1(read_text(e["file"])), "dhash": doc_hash(data["xml"]),
                            "fmt": FMT, **({"parent": known["parent"]} if known and known.get("parent") else {})}

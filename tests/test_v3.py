@@ -51,7 +51,7 @@ class Migration(Project):
         cfg = manifest.load()
         self.assertEqual(cfg["docs"], {"hld": {"id": "D1", "name": "HLD", "dir": "docs/hld",
                                                "tabs": [{"id": "t1", "file": "docs/hld/1-intro.md"}]}})
-        self.assertEqual(cfg["files"], "managed")
+        self.assertEqual((cfg["schema"], cfg["conflicts"]), (3, "merge"))
         st = files.load_state()["docs"]["hld"]
         self.assertEqual(st["tabs"]["t1"]["widgets"], {"w1": {"pub": 2, "hash": "c"}})
         self.assertEqual(sorted(os.listdir(".docsync/hld")),
@@ -91,25 +91,62 @@ class Layout(Project):
         self.assertEqual([t["id"] for t in self.cfg()["docs"]["d"]["tabs"]], ["t2", "t1"])
 
 
-class Kept(Project):
+class Ownership(Project):
+    """A tab file in its doc's folder is docsync's: it follows the doc. A file elsewhere is the project's."""
+
     def setUp(self):
         super().setUp()
+        textio.write("README.md", "# 1 Intro\n\nhello\n")
+        self.manifest({"d": {"id": "D1", "name": "Doc", "dir": "docs/d", "tabs": [{"id": "t1", "file": "README.md"}]}})
         self.run_sync()
-        cfg = self.cfg()
-        cfg["files"] = "kept"
-        textio.write("docsync.json", json.dumps(cfg))
 
-    def test_a_tab_renamed_in_the_doc_keeps_its_file(self):
-        self.fake.tabs["t1"]["name"] = "1 Start"
-        self.fake.edit("t1", "# 1 Start\n\nhello")
-        self.assertEqual(self.run_sync(), [("pulled", "1-intro.md")])
-        self.assertEqual(textio.read("docs/d/1-intro.md"), "# 1 Start\n\nhello\n")
+    def test_a_file_outside_the_folder_is_not_renamed(self):
+        self.fake.tabs["t1"]["name"] = "2 Start"
+        self.fake.edit("t1", "# 2 Start\n\nhello")
+        self.assertEqual(self.run_sync(), [("pulled", "README.md")])
+        self.assertEqual(textio.read("README.md"), "# 2 Start\n\nhello\n")
 
-    def test_a_tab_deleted_in_the_doc_leaves_its_file_and_its_mapping(self):
+    def test_a_file_outside_the_folder_stays_when_its_tab_is_deleted(self):
         del self.fake.tabs["t1"]
-        self.assertEqual(self.run_sync(), [("deleted", "1-intro.md")])
-        self.assertTrue(os.path.exists("docs/d/1-intro.md"))
+        self.assertEqual(self.run_sync(), [("deleted", "README.md")])
+        self.assertTrue(os.path.exists("README.md"))
         self.assertEqual(self.cfg()["docs"]["d"]["tabs"], [])
+        self.assertEqual(self.run_sync(), [])  # and it does not come back as a new tab
+
+    def test_a_file_in_the_folder_goes_to_the_trash_when_its_tab_is_deleted(self):
+        self.fake.add_tab("t2", "2 More", "# 2 More\n\nb")
+        self.run_sync()
+        del self.fake.tabs["t2"]
+        self.assertEqual(self.run_sync(), [("deleted", "2-more.md")])
+        self.assertFalse(os.path.exists("docs/d/2-more.md"))
+
+
+class LocalWins(Project):
+    """sync --force (conflicts "local"): both ways; a tab changed on both sides is merged block by block."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake.edit("t1", "# 1 Intro\n\none\n\ntwo\n\nthree")
+        self.run_sync()
+        self.args.force = True
+
+    def test_the_docs_own_changes_come_down(self):
+        self.fake.edit("t1", "# 1 Intro\n\none\n\ntwo\n\nthree from the web")
+        self.assertEqual(self.run_sync(), [("pulled", "1-intro.md")])
+
+    def test_both_sides_merge_and_the_file_wins_on_the_same_block(self):
+        self.fake.edit("t1", "# 1 Intro\n\none web\n\ntwo\n\nthree web")
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\none local\n\ntwo\n\nthree\n")
+        self.assertEqual(self.run_sync(), [("info", "1-intro.md"), ("pushed", "1-intro.md")])
+        self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\none local\n\ntwo\n\nthree web\n")
+        self.assertEqual(textio.read("docs/d/1-intro.md"), "# 1 Intro\n\none local\n\ntwo\n\nthree web\n")
+
+    def test_a_tab_deleted_in_the_doc_but_edited_here_is_made_again(self):
+        del self.fake.tabs["t1"]
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nmine\n")
+        self.run_sync()
+        self.assertEqual([t["name"] for t in self.fake.tabs.values()], ["1 Intro"])
+        self.assertIn("mine", list(self.fake.tabs.values())[0]["xml"])
 
 
 class Managed(Project):
@@ -218,7 +255,7 @@ class Outputs(Project):
         self.manifest({"n": {"id": None, "name": "New", "dir": "docs/n", "tabs": []}})
         self.fake.tabs.clear()
         projects.register(".")
-        projects.set_mode(".", "auto")
+        projects.set_mode(".", "turn")
         answer = hooks.stop_hook({"cwd": os.getcwd()})
         self.assertEqual(answer["decision"], "block")
         self.assertIn("https://claude.ai/code/artifact/D-new", answer["reason"])

@@ -3,7 +3,7 @@ tabs and docs. A comment that asks Claude and has no answer yet can hold a tab b
 import difflib, json, os, sys
 
 from . import mcp, output as out
-from .files import (FMT, TRASH, base, base_for, blocks_path, local_hash, move_tab_files, own_files, posix,
+from .files import (FMT, TRASH, save_base, base, base_for, blocks_path, local_hash, move_tab_files, own_files, posix,
                     read_text, slug, svc_dir, to_trash)
 from .mcp import C, find_key
 from .pull import refresh, write_blocks
@@ -27,8 +27,8 @@ def local_md(P, key, file):
 
 
 def maybe_rename(P, key, e, doc_id, tab_id, t, data):
-    """The tab's `# heading` was edited locally since the last sync -> rename the tab to it, and its files too
-    (managed)."""
+    """The tab's `# heading` was edited locally since the last sync -> rename the tab to it, and its files too when
+    they are docsync's (in the doc's folder)."""
     new = h1(read_text(e["file"]))
     old = t.get("h1") or h1(to_markdown(data["xml"])[0])
     t["h1"] = old
@@ -42,7 +42,7 @@ def maybe_rename(P, key, e, doc_id, tab_id, t, data):
         {"op": "set", "path": ["tabs", tab_id, "name"], "value": new}]}})
     of = e["file"]
     nf = posix(os.path.join(os.path.dirname(of), base_for(new, base(of)) + ".md"))
-    moved = not P.kept and nf != of and not os.path.exists(nf)
+    moved = P.owned(key, of) and nf != of and not os.path.exists(nf)
     if moved:
         move_tab_files(key, of, nf)
         e["file"] = nf
@@ -78,6 +78,7 @@ def push_tab(P, key, e, doc_id, t, data, tab_id, new=False):
     ok = same(back, back_blocks, md, blocks)
     t.update(rev=after["rev"], hash=local_hash(key, file), dhash=doc_hash(after["xml"]), fmt=FMT)
     t.pop("conflict_rev", None)
+    save_base(key, file, md, blocks)
     refresh(P, key, e, t)
     P.save()
     kind, what = ("created", "new tab · ") if new else ("pushed", "")

@@ -1,12 +1,16 @@
-"""The user config: the only list of projects, the default sync mode and each project's own mode.
+"""The user config: the only list of projects, when this machine syncs by default, and each project's own choice.
 
-{"schema": 2, "sync": "user" | "auto" | "auto-force", "projects": {"<project root>": {"sync": "<its own mode>"}}}"""
+{"schema": 3, "sync": "manual" | "turn", "projects": {"<project root>": {"sync": "manual" | "turn"}}}
+
+sync: "manual" — the user runs docsync; "turn" — a hook syncs when Claude finishes a turn. What a sync does with a tab
+changed on both sides is the project's "conflicts" in its docsync.json (manifest.py), not a setting of this machine."""
 import json, os, platform
 
 from .manifest import CONFIG
 from .textio import load_json, write
 
-SCHEMA = 2  # a change is a breaking update (CHANGELOG.md); docsync moves an older config to it when it reads it
+SCHEMA = 3  # a change is a breaking update (CHANGELOG.md); docsync moves an older config to it when it reads it
+OLD = {"user": "manual", "model": "turn", "auto": "turn", "auto-force": "turn"}  # modes before 4.0
 
 
 def user_config():
@@ -29,15 +33,34 @@ def load_user():
             return {}
         u = load_json(old)
         os.replace(old, old + ".migrated")
-    if u.get("sync") == "model":  # 2.2 and older: Claude ran the sync; now a hook does it at the end of a turn
-        u["sync"] = "auto"
     if isinstance(u.get("projects"), list):
         u["projects"] = {r: {} for r in u["projects"]}
     if u.get("schema", 1) < SCHEMA:
+        move_modes(u)
         u["schema"] = SCHEMA
         os.makedirs(os.path.dirname(p), exist_ok=True)
         write(p, json.dumps(u, ensure_ascii=False, indent=1))
     return u
+
+
+def move_modes(u):
+    """Modes before 4.0 named when and how: "auto-force" was "turn" and the local files win. Now when stays here and
+    how goes to each project's docsync.json as "conflicts"."""
+    for root, entry in u.get("projects", {}).items():
+        old = entry.get("sync") or u.get("sync")
+        path = os.path.join(root, CONFIG)
+        if os.path.exists(path):
+            try:
+                cfg = load_json(path)
+            except ValueError:
+                cfg = None
+            if cfg is not None and "conflicts" not in cfg:
+                cfg["conflicts"] = "local" if old == "auto-force" else "merge"
+                write(path, json.dumps(cfg, ensure_ascii=False, indent=1) + "\n")
+        if entry.get("sync"):
+            entry["sync"] = OLD.get(entry["sync"], entry["sync"])
+    if u.get("sync"):
+        u["sync"] = OLD.get(u["sync"], u["sync"])
 
 
 def save_user(u):

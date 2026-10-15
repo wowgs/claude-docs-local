@@ -1,28 +1,38 @@
 """The project's manifest, docsync.json: what is synced, the same for everyone who works on the project (in git).
 
-{"schema": 2, "name": "<project>", "files": "managed" | "kept",
+{"schema": 3, "name": "<project>", "conflicts": "merge" | "local",
  "docs": {"<doc key>": {"id": "<doc id>" | null, "name": "<doc name>", "dir": "<folder for new tabs>",
                         "tabs": [{"id": "<tab id>" | null, "file": "<path>.md", "parent": "<tab id>"}]}}}
 
 The doc key names the doc's folder of own files, .docsync/<doc key>/. The tabs are in the doc's order. A tab or doc
-with id null is made by the next sync. files: "managed" — docsync renames and deletes the tab files after the doc;
-"kept" — it never renames or deletes them (a tab deleted in the doc only loses its file's mapping)."""
+with id null is made by the next sync.
+
+conflicts: what a sync does with a tab changed both here and in the doc. "merge": nothing, it is a conflict that Claude
+merges; "local": the local file wins. A property of the project (do other people edit its docs?), so it is here.
+
+Who owns a tab file follows from where it is: a file in its doc's dir is docsync's (renamed after the doc, moved to the
+trash when the tab is deleted in the doc; a new .md there is a new tab); a file elsewhere, such as README.md, is the
+project's (never renamed or deleted; a tab deleted in the doc only loses its mapping)."""
 import json, os
 
 from .files import posix, slug
 from .textio import load_json, write
 
 CONFIG = "docsync.json"
-SCHEMA = 2  # a change is a breaking update (CHANGELOG.md); docsync moves older files to it when it reads them
+SCHEMA = 3  # a change is a breaking update (CHANGELOG.md); docsync moves older files to it when it reads them
 
 
 def load(path=CONFIG):
     """The manifest, moved to schema 2 first when it is older (migrate.py)."""
     cfg = load_json(path)
-    if cfg.get("schema", 1) < SCHEMA:
+    if cfg.get("schema", 1) < 2:
         from . import migrate
         migrate.project(path)
         cfg = load_json(path)
+    if cfg.get("schema") == 2:  # 3.0: "files" managed | kept; ownership now follows from where a file is
+        cfg.pop("files", None)
+        cfg["schema"] = SCHEMA
+        save(cfg, path)
     if normalize(cfg):
         save(cfg, path)
     return cfg
@@ -37,7 +47,7 @@ def normalize(cfg):
     tabs. Returns True when it changed something."""
     changed = False
     cfg.setdefault("schema", SCHEMA)
-    cfg.setdefault("files", "managed")
+    cfg.setdefault("conflicts", "merge")
     docs = cfg.setdefault("docs", {})
     for k in list(docs):
         v = docs[k]
@@ -68,8 +78,13 @@ def doc_dir(key, doc):
     return doc.get("dir") or posix(os.path.join("docs", key))
 
 
-def kept(cfg):
-    return cfg.get("files") == "kept"
+def local_wins(cfg):
+    return cfg.get("conflicts") == "local"
+
+
+def owned(key, doc, file):
+    """Is the tab file docsync's (in its doc's folder), so that it follows the doc? Else it is the project's."""
+    return file.startswith(doc_dir(key, doc).rstrip("/") + "/")
 
 
 def mapped(cfg):

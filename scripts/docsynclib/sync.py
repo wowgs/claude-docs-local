@@ -1,21 +1,25 @@
 """Sync one project's docs: per tab, by freshness since the last sync. A tab docsync cannot handle is reported and
-left as it is; the others go on. The tab files are where the manifest says (manifest.py); with files "kept", docsync
-never renames or deletes them."""
+left as it is; the others go on. The tab files are where the manifest says (manifest.py); docsync renames and deletes
+only the ones in their doc's folder. --force: the local files win (sync, push); pull --force: the doc wins, and the
+local edits it writes over go to the trash first."""
 import os
 from concurrent.futures import ThreadPoolExecutor
 
 from . import mcp, output as out
-from .files import (FMT, TRASH, base_for, local_changed, local_hash, move_tab_files, own_files, posix, svc_dir,
-                    tab_files, to_trash, words)
+from .files import (FMT, TRASH, base_for, load_base, local_changed, local_hash, move_tab_files, own_files, posix,
+                    save_base, svc_dir, tab_files, to_trash, words)
 from .manifest import mapped
 from .mcp import C
 from .project import Project
-from .pull import pull_tab, refresh
+from .pull import pull_tab, refresh, write_blocks
+from .textio import write
 from .push import create_doc, create_tab, delete_tab, local_md, push_tab
 from .widgets import sync_widgets
 from docmodel.compare import doc_hash, h1, same
 from docmodel.errors import DocError
+from docmodel.fileview import to_file
 from docmodel.markdown import to_markdown
+from docmodel.merge import merge
 
 
 def remote_tabs(doc_id):
@@ -82,10 +86,9 @@ def prefetch(P, key, doc_id):
     return res[0], full, revs, widgets
 
 def new_files(P, key):
-    """Tab files in the doc's folder that no doc of the project has: new tabs made here. Only with managed files:
-    with kept files a new tab is an entry in the manifest, and a file whose tab was deleted in the doc stays a file."""
+    """Tab files in the doc's folder that no doc of the project has: new tabs made here (the folder is docsync's)."""
     d = P.dir(key)
-    if P.kept or not os.path.isdir(d):
+    if not os.path.isdir(d):
         return []
     taken = mapped(P.cfg)
     return [posix(os.path.join(d, f)) for f in sorted(os.listdir(d))
@@ -253,6 +256,8 @@ def sync_tab(args, mode, P, key, e, tab_id, name, node, full, revs, fetched):
         else:
             data = mcp.read_node(doc_id, node)
     rem = data["rev"] != t["rev"]
+    if not loc and mode != "status" and load_base(key, file) is None:
+        save_base(key, file, *local_md(P, key, file))  # in sync: the file is the base for a later merge
     out.STATS["checked"] = out.STATS.get("checked", 0) + 1
     out.DOC["checked"] += 1
     if rem and t.get("dhash") and doc_hash(data["xml"]) == t["dhash"]:
@@ -276,7 +281,9 @@ def sync_tab(args, mode, P, key, e, tab_id, name, node, full, revs, fetched):
         out.ev("conflict", file, f"changed locally and in the doc (rev {t['rev']} → {data['rev']}) · nothing done")
     elif mode == "pull" and loc and not args.force:
         out.ev("skip", file, "local edits not pushed (push, or pull --force to drop them)")
-    elif (mode in ("sync", "push") and loc) and not (mode == "sync" and rem and args.force):
+    elif mode in ("sync", "push") and loc:  # with --force also when the doc changed too: the local file wins
+        if rem and mode == "sync":
+            merge_doc(P, key, e, data)
         push_tab(P, key, e, doc_id, t, data, tab_id)
     elif mode in ("sync", "pull") and (rem or (mode == "pull" and args.force)):
         pull_tab(P, key, e, tab_id, name, node, data if "xml" in data else None)
@@ -284,6 +291,25 @@ def sync_tab(args, mode, P, key, e, tab_id, name, node, full, revs, fetched):
         pull_tab(P, key, e, tab_id, name, node, data if "xml" in data else None)
     else:
         refresh(P, key, e, t)
+
+
+def merge_doc(P, key, e, data):
+    """sync --force on a tab changed on both sides: the doc's own changes merged into the file block by block
+    (docmodel.merge), so that the push keeps them; where both changed the same blocks the file wins. Without a base
+    (the tab as of the last sync) the file wins whole."""
+    file = e["file"]
+    b = load_base(key, file)
+    if b is None:
+        return
+    local = local_md(P, key, file)
+    back, back_blocks, _ = to_markdown(data["xml"])
+    md, chips = merge(b, local, (back, back_blocks))
+    if same(md, chips, *local):
+        return
+    md, chips = to_file(md, chips, P.view(key, file))
+    write(file, md)
+    write_blocks(key, file, chips)
+    out.ev("info", file, "the doc's own changes merged into the file")
 
 
 def first_sync(args, mode, P, key, e, tab_id, name, node):
@@ -301,6 +327,7 @@ def first_sync(args, mode, P, key, e, tab_id, name, node):
     md, blocks = local_md(P, key, e["file"])
     if same(back, back_blocks, md, blocks):
         if mode != "status":
+            save_base(key, e["file"], md, blocks)
             P.dst(key)["tabs"][tab_id] = {"name": name, "node": node, "rev": data["rev"],
                                           "hash": local_hash(key, e["file"]), "widgets": {},
                                           "h1": h1(md), "dhash": doc_hash(data["xml"]), "fmt": 0}
@@ -308,9 +335,9 @@ def first_sync(args, mode, P, key, e, tab_id, name, node):
         out.ev("insync", e["file"], "in sync")
     elif mode == "status":
         out.ev("info", e["file"], "no sync state on this machine; the file and the tab differ")
-    elif mode == "pull" and args.force:
+    elif mode == "pull" and args.force:  # the local file goes to the trash first
         pull_tab(P, key, e, tab_id, name, node, data)
-    elif mode == "push" and args.force:
+    elif mode in ("sync", "push") and args.force:
         t = {"name": name, "node": node, "rev": data["rev"], "hash": "", "widgets": {}, "h1": h1(back), "fmt": FMT}
         P.dst(key)["tabs"][tab_id] = t
         push_tab(P, key, e, doc_id, t, data, tab_id)
@@ -320,8 +347,9 @@ def first_sync(args, mode, P, key, e, tab_id, name, node):
 
 
 def gone_from_doc(args, mode, P, key, e):
-    """A tab of the manifest that the doc no longer has: its file goes to the trash (managed), or stays and is no
-    longer synced (kept)."""
+    """A tab of the manifest that the doc no longer has. Its file goes to the trash when it is docsync's (in the doc's
+    folder), and stays, no longer synced, when it is the project's. A file with local edits is a conflict; with
+    --force the local file wins and the next step makes the tab again."""
     t = P.dst(key)["tabs"].get(e["id"])
     file = e["file"]
     if mode == "status":
@@ -329,40 +357,48 @@ def gone_from_doc(args, mode, P, key, e):
         return
     if mode not in ("sync", "pull"):
         return
-    if P.kept:
-        for f in own_files(key, file):
-            to_trash(f)
-        out.ev("deleted", file, "deleted in the doc · the file stays and is no longer synced")
-    else:
-        if t and os.path.exists(file) and local_changed(key, file, t) and not args.force:
+    if t and os.path.exists(file) and local_changed(key, file, t):
+        if not args.force or mode == "pull":
             out.ev("conflict", file, "deleted in the doc, edited locally · nothing done")
             return
+        P.dst(key)["tabs"].pop(e["id"], None)
+        e["id"] = None  # made again from the local file, below in sync_doc
+        e.pop("parent", None)
+        out.ev("info", file, "deleted in the doc, edited locally · the local file wins: the tab is made again")
+        P.save()
+        return
+    if P.owned(key, file):
         for f in tab_files(key, file):
             to_trash(f)
         out.ev("deleted", file, f"deleted in the doc · local files moved to {TRASH}")
+    else:
+        for f in own_files(key, file):
+            to_trash(f)
+        out.ev("deleted", file, "deleted in the doc · the file stays and is no longer synced")
     P.doc(key)["tabs"].remove(e)
     P.dst(key)["tabs"].pop(e["id"], None)
     P.save()
 
 
 def doc_gone(mode, P, key):
-    """The doc is not readable (deleted, or no access): it leaves the manifest; its tab files go to the trash
-    (managed) or stay (kept)."""
+    """The doc is not readable (deleted, or no access): it leaves the manifest; the tab files in its folder go to the
+    trash, the ones elsewhere stay."""
     if mode == "status":
         out.ev("warn", P.dir(key), "doc not readable (deleted or no access)")
         return
     if mode not in ("sync", "pull"):
         return
     label = P.dir(key)
-    if not P.kept:
-        for e in P.doc(key)["tabs"]:
+    stay = [e["file"] for e in P.doc(key)["tabs"] if not P.owned(key, e["file"])]
+    for e in P.doc(key)["tabs"]:
+        if P.owned(key, e["file"]):
             to_trash(e["file"])
     to_trash(svc_dir(key))
     del P.cfg["docs"][key]
     P.st["docs"].pop(key, None)
     P.save()
-    out.ev("deleted", label,
-           "doc not readable (deleted or no access) · " + ("its files stay" if P.kept else f"files moved to {TRASH}"))
+    out.ev("deleted", label, f"doc not readable (deleted or no access) · files moved to {TRASH}"
+           + (" · these stay: " + ", ".join(stay) if stay else ""))
 
 
 def adopt_renamed(P, key):

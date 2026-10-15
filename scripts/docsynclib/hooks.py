@@ -1,12 +1,13 @@
 """Claude Code hooks: SessionStart (a project's settings), the guard on the Docs tools that write (only comments), Stop
-(send the local edits when Claude finishes a turn) and the Stop hook that runs in the background in mode auto-force
-and wakes Claude when the push fails (asyncRewake)."""
+(sync when Claude finishes a turn, in projects whose sync is "turn") and the Stop hook that runs in the background in
+projects whose conflicts are "local" and wakes Claude when the sync fails (asyncRewake)."""
 import argparse, json, os, subprocess, sys, time
 
 from . import output as out
 from .claude import decide, edit_json, lock, project_settings
 from .files import LOCK, PUSH, SVC
-from .manifest import CONFIG
+from .manifest import CONFIG, local_wins
+from . import manifest
 from .projects import mode_of, project_of
 from .push import HELD
 from .sync import cmd_sync, local_pending
@@ -31,7 +32,7 @@ def sync_now(root, force=False):
     os.chdir(root)
     out.JSON, out.TTY, out.CONFLICTS = True, False, 0
     out.EVENTS.clear()
-    a = argparse.Namespace(config=CONFIG, dirs=[], force=force, cmd="push" if force else "sync")
+    a = argparse.Namespace(config=CONFIG, dirs=[], force=force, cmd="sync")
     try:
         cmd_sync(a, a.cmd)
     except SystemExit as e:
@@ -50,25 +51,27 @@ def open_text(docs):
             "session's Outputs: " + ", ".join(f"{d['doc']} ({d['url']})" for d in docs) + ".")
 
 def stop_hook(event):
-    """Stop hook: when Claude finishes a turn in a project with local edits, send them.
-    Mode auto: sync now; a conflict or an error goes back to Claude once, so it fixes the files or tells the user.
-    Mode auto-force: `push --force` in the background; stop_wake tells Claude when it fails, and a failure it could
-    not report (Claude Code ended it, as `claude -p` does) is shown to the user at the end of the next turn."""
+    """Stop hook, in a project whose sync is "turn": sync when Claude finishes a turn.
+    Conflicts "merge": sync now when there are local edits; a conflict or an error goes back to Claude once, so it
+    merges or fixes the files or tells the user.
+    Conflicts "local": `sync --force` in the background after every turn, both ways (the doc's own changes come down,
+    a tab changed on both sides is merged block by block and the local file wins where both changed the same block);
+    stop_wake tells Claude when it fails, and a failure it could not report (Claude Code ended it, as `claude -p`
+    does) is shown to the user at the end of the next turn."""
     root = project_of(event.get("cwd") or os.getcwd())
-    mode = mode_of(root) if root else None
-    if not root or mode not in ("auto", "auto-force"):
+    if not root or mode_of(root) != "turn" or not os.path.exists(os.path.join(root, CONFIG)):
         return None
     os.chdir(root)
     last = load_json(LAST) if os.path.exists(LAST) else None
-    if mode == "auto-force":
+    if local_wins(manifest.load(CONFIG)):
         notice = None
         stuck = last and last.get("running") and time.time() - last.get("started", 0) > STUCK_S
         if last and (last.get("rc") or stuck) and not last.get("shown"):
             why = "did not finish" if stuck else "failed: " + "; ".join(last.get("problems", []))
-            notice = {"systemMessage": "docs-local: the last background push " + why}
+            notice = {"systemMessage": "docs-local: the last background sync " + why}
             last["shown"] = True
             write(LAST, json.dumps(last, ensure_ascii=False))
-        if local_pending(CONFIG) and not (last and last.get("running") and not stuck):
+        if not (last and last.get("running") and not stuck):
             os.makedirs(SVC, exist_ok=True)
             write(LAST, json.dumps({"running": True, "started": time.time()}))
             subprocess.Popen([sys.executable, SCRIPT, "push-background"], cwd=root, start_new_session=True,
@@ -121,14 +124,16 @@ def held_text(held):
     return "\n".join(lines)
 
 def stop_wake(event):
-    """Stop hook that Claude Code runs in the background and that wakes Claude on exit code 2 (asyncRewake), for mode
-    auto-force: wait for the push that the Stop hook beside it starts and, when it fails, return (2, what Claude
-    must do). The push runs in a process of its own, so it finishes even when Claude Code ends this hook early
-    (`claude -p` does); then the next Stop shows the failure to the user instead."""
+    """Stop hook that Claude Code runs in the background and that wakes Claude on exit code 2 (asyncRewake), in a
+    project whose conflicts are "local": wait for the sync that the Stop hook beside it starts and, when it fails,
+    return (2, what Claude must do). The sync runs in a process of its own, so it finishes even when Claude Code ends
+    this hook early (`claude -p` does); then the next Stop shows the failure to the user instead."""
     root = project_of(event.get("cwd") or os.getcwd())
-    if not root or mode_of(root) != "auto-force":
+    if not root or mode_of(root) != "turn" or not os.path.exists(os.path.join(root, CONFIG)):
         return 0, ""
     os.chdir(root)
+    if not local_wins(manifest.load(CONFIG)):
+        return 0, ""
     t0 = time.time()
     while True:
         last = (load_json(LAST) if os.path.exists(LAST) else None) or {}
@@ -146,7 +151,7 @@ def stop_wake(event):
     write(LAST, json.dumps(last, ensure_ascii=False))
     if not last.get("rc"):
         return 2, "docs-local: " + open_text(last["created"])
-    parts = ["docs-local: the background push after your last turn did not send everything."]
+    parts = ["docs-local: the background sync after your last turn did not finish everything."]
     if last.get("held"):
         parts.append(held_text(last["held"]))
     errors = [p for p in last.get("problems", []) if HELD not in p]
@@ -158,7 +163,8 @@ def stop_wake(event):
     return 2, "\n".join(parts)
 
 def hook_wake(args):
-    """For Claude Code: the Stop hook of mode auto-force (asyncRewake); the text for Claude goes to stderr."""
+    """For Claude Code: the background Stop hook of a project whose conflicts are "local" (asyncRewake); the text for
+    Claude goes to stderr."""
     try:
         event = json.load(sys.stdin)
     except ValueError:
@@ -169,7 +175,8 @@ def hook_wake(args):
     sys.exit(code)
 
 def push_background(args):
-    """For the auto-force hook: push --force, one at a time per project, the result kept in .docsync/push.json."""
+    """For the Stop hook of a project whose conflicts are "local": sync --force, one at a time per project, the result
+    kept in .docsync/push.json."""
     root = os.getcwd()
     marker = load_json(os.path.join(root, LAST)) if os.path.exists(os.path.join(root, LAST)) else {}
     os.makedirs(os.path.join(root, SVC), exist_ok=True)

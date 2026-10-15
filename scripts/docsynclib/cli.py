@@ -1,13 +1,15 @@
 """docsync — keep claude.ai Docs as local markdown files (the source of truth) and sync them.
 
 A sync is safe when several people edit a doc: a tab changed both here and in the doc is a conflict, and nothing
-is overwritten. push --force (mode auto-force) lets the local files win. A push changes only the paragraphs, list
-items and table rows that changed, so a comment keeps its place while some of its words stay (docmodel/edits.py).
+is overwritten. sync --force (a project whose conflicts are "local") merges such a tab block by block and the local
+file wins where both changed the same blocks. A push changes only the paragraphs, list items and table rows that
+changed, so a comment keeps its place while some of its words stay (docmodel/edits.py).
 
   docsync [sync]            sync the project you are in; in a folder that holds projects, those;
                             elsewhere, all your projects
   docsync status            what sync would do, changes nothing
-  docsync pull | push       one direction only; --force overrides the safety checks
+  docsync pull | push       one direction only
+  --force                   sync, push: the local files win; pull: the doc wins (local edits go to the trash)
   docsync doc add <link> [dir]   set up a doc in this project (docs/<name>/ by default) and pull it
   docsync doc import --scan | --check FILE... | [--name NAME] FILE...
                             for the model: markdown files of the project to import; what would not survive the
@@ -19,18 +21,19 @@ items and table rows that changed, so a comment keeps its place while some of it
   docsync project name <name>   the project's name
   docsync project list      your projects
   docsync project check | use [--mode M] | remove   for /docs-local: this folder's state, turn local docs on, off
-  docsync project mode user|auto|auto-force|default   this project's own sync mode
-  docsync project files managed|kept   whether docsync may rename and delete this project's tab files
+  docsync project mode manual|turn|default   when this machine syncs this project
+  docsync project conflicts merge|local   a tab changed on both sides: Claude merges, or the local file wins
   docsync setup scan        for the model during setup: folders Claude Code has worked in
-  docsync setup --mode user|auto|auto-force [--project <folder>]...   for the model during setup
+  docsync setup --mode manual|turn [--conflicts merge|local] [--project <folder>]...   for the model during setup
   docsync uninstall         remove the docsync command and settings; docs stay
 
 Project: a root in your config, with the manifest docsync.json there (in git): each doc's id, name, folder for new
-tabs and tab files (any .md path); "files": "managed" or "kept". Each tab's chips, diagram code and diagram picture are
-in .docsync/<doc key>/; this machine's sync state in .docsync/state.json (not in git). A project of docsync 2.x is
+tabs and tab files (any .md path), and "conflicts": "merge" or "local". docsync renames and deletes only tab files in
+their doc's folder; files elsewhere, such as README.md, stay where they are. Each tab's chips, diagram code and diagram
+picture are in .docsync/<doc key>/; this machine's sync state in .docsync/state.json (not in git). An older project is
 moved to this layout the first time docsync reads it.
-Your settings and projects: ~/.config/docsync/config.json ($XDG_CONFIG_HOME, %APPDATA% on Windows): the default sync
-mode and each project's own.
+Your settings and projects: ~/.config/docsync/config.json ($XDG_CONFIG_HOME, %APPDATA% on Windows): when this machine
+syncs ("manual" or "turn"), by default and per project.
 Claude Code: plugins docs-local and docs-local-files from the wowgs marketplace; docs-local-files is off in
 ~/.claude/settings.json and on in each project's .claude/settings.local.json, which also turns off the Docs tools
 that write, except comments. Claude Code updates the plugins (claude plugin update).
@@ -38,9 +41,8 @@ Login: none of its own. Run in a Claude Code session, docsync calls the Claude D
 (the plugin's hooks module starts `docsync bridge` and sets DOCSYNC_BRIDGE); elsewhere it uses Claude Code's stored
 claude.ai login, read on each run and never stored by docsync.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
-Sync modes, per project: "user" (you run docsync), "auto" (a hook syncs when Claude finishes a turn, and stops on
-conflicts), "auto-force" (a hook pushes in the background when Claude finishes a turn; the local files overwrite the
-doc).
+When: "manual" (you run docsync) or "turn" (a hook syncs when Claude finishes a turn). Conflicts: "merge" (the hook
+syncs at once and hands a conflict to Claude) or "local" (the hook syncs in the background with --force).
 Output: for people; one JSON document with --json.
 Exit codes: 0 done, 1 error, 2 conflicts.
 """
@@ -59,7 +61,8 @@ from .push import ARTIFACT
 from .sync import cmd_sync
 from .textio import load_json, read, write
 
-MODES = ("user", "auto", "auto-force")  # who syncs: the user, the Stop hook, the Stop hook with push --force
+MODES = ("manual", "turn")  # when this machine syncs: when the user runs docsync, when Claude finishes a turn
+CONFLICTS = ("merge", "local")  # a tab changed on both sides: Claude merges, or the local file wins
 RESULT = []
 
 
@@ -85,7 +88,7 @@ def doc_add(args):
     cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else {}
     cfg.setdefault("schema", manifest.SCHEMA)
     cfg.setdefault("name", os.path.basename(root.rstrip(os.sep)) or root)
-    cfg.setdefault("files", "managed")
+    cfg.setdefault("conflicts", "merge")
     cfg.setdefault("docs", {})
     for k, v in cfg["docs"].items():
         if v.get("id") == doc_id:
@@ -123,7 +126,7 @@ def in_project():
     here = os.getcwd()
     os.chdir(root)
     return root, here, manifest.load(CONFIG) if os.path.exists(CONFIG) else \
-        {"schema": manifest.SCHEMA, "name": os.path.basename(root), "files": "managed", "docs": {}}
+        {"schema": manifest.SCHEMA, "name": os.path.basename(root), "conflicts": "merge", "docs": {}}
 
 
 def tab_file(root, here, path):
@@ -225,16 +228,28 @@ def project_mode(args):
     print(json.dumps({"root": root, "mode": mode_of(root), "own": args.mode != "default"}))
 
 
-def project_files(args):
-    """Whether docsync may rename and delete the project's tab files after the doc (managed) or never (kept)."""
+def set_conflicts(root, conflicts):
+    """The project's "conflicts" in its docsync.json (made when it has none yet)."""
+    path = os.path.join(root, CONFIG)
+    here = os.getcwd()
+    os.chdir(root)
+    try:
+        cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else \
+            {"schema": manifest.SCHEMA, "name": os.path.basename(root), "docs": {}}
+        cfg["conflicts"] = conflicts
+        manifest.save(cfg)
+    finally:
+        os.chdir(here)
+    return path
+
+
+def project_conflicts(args):
+    """What a sync does with a tab changed on both sides: Claude merges, or the local file wins."""
     root = project_of(os.getcwd())
     if not root:
         sys.exit("not in a project")
-    os.chdir(root)
-    cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else {"schema": manifest.SCHEMA, "docs": {}}
-    cfg["files"] = args.files
-    manifest.save(cfg)
-    print(json.dumps({"root": root, "files": args.files}))
+    set_conflicts(root, args.conflicts)
+    print(json.dumps({"root": root, "conflicts": args.conflicts}))
 
 
 def project_remove(args):
@@ -315,7 +330,7 @@ def setup(args):
     first = "sync" not in u
     mode = args.mode or u.get("sync")
     if mode not in MODES:
-        sys.exit("no saved mode: ask the user, then run docsync setup --mode user|auto|auto-force")
+        sys.exit("no saved mode: ask the user, then run docsync setup --mode manual|turn")
     u["sync"] = mode
     save_user(u)
     errors, todo = [], []
@@ -333,11 +348,13 @@ def setup(args):
         if root not in projects():
             new.append(root)
         turn_on(root)
+        if args.conflicts:
+            set_conflicts(root, args.conflicts)
     for r in projects():
         if os.path.isdir(r):
             edit_json(project_settings(r), lock)
     shell = None
-    if mode == "user":
+    if mode == "manual":
         shell, err = shell_command()
         if err:
             errors.append(err)
@@ -457,17 +474,18 @@ def parser():
     a = proj.add_parser("mode", help="this project's own sync mode; default: the default one again")
     a.add_argument("mode", choices=sorted(MODES) + ["default"])
     a.add_argument("path", nargs="?")
-    a = proj.add_parser("files", help="managed: docsync renames and deletes tab files after the doc; kept: never")
-    a.add_argument("files", choices=["managed", "kept"])
+    a = proj.add_parser("conflicts", help="a tab changed on both sides: merge (Claude merges) or local (the file wins)")
+    a.add_argument("conflicts", choices=CONFLICTS)
     a = proj.add_parser("name", help="the project's name")
     a.add_argument("name")
     a = sub.add_parser("setup", help="for the model during setup: settings, the shell command, projects; then a check")
     a.add_argument("action", nargs="?", choices=["scan"], help="scan: list the folders to ask about (JSON)")
-    a.add_argument("--mode", choices=sorted(MODES), help="who syncs (the saved choice when left out)")
+    a.add_argument("--mode", choices=sorted(MODES), help="when this machine syncs (the saved choice when left out)")
+    a.add_argument("--conflicts", choices=CONFLICTS, help="for the projects of --project: merge or local")
     a.add_argument("--project", action="append", default=[], metavar="FOLDER", help="turn local docs on here; repeatable")
     sub.add_parser("hook", help="for Claude Code: the hooks on the Docs tools that write and on Stop")
-    sub.add_parser("hook-wake", help="for Claude Code: the Stop hook of mode auto-force, run in the background")
-    sub.add_parser("push-background", help="for the auto-force hook: push --force, result in .docsync/push.json")
+    sub.add_parser("hook-wake", help="for Claude Code: the background Stop hook of a project whose conflicts are local")
+    sub.add_parser("push-background", help="for that hook: sync --force, result in .docsync/push.json")
     sub.add_parser("bridge", help="for the plugin's hooks module: the broker to the session's Claude Docs connector")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     return p
@@ -477,7 +495,7 @@ COMMANDS = {
     "doc": {"add": doc_add, "list": doc_list, "import": importer.cmd_import, "rename": doc_rename},
     "tab": {"add": tab_add, "parent": tab_parent},
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove,
-                "mode": project_mode, "files": project_files, "name": project_rename},
+                "mode": project_mode, "conflicts": project_conflicts, "name": project_rename},
     "setup": {None: setup},
     "hook": {None: hook},
     "hook-wake": {None: hook_wake},

@@ -12,9 +12,9 @@ class Project:
         self.st = load_state()
         self._saved = json.dumps(self.cfg, ensure_ascii=False, sort_keys=True)
 
-    @property
-    def kept(self):
-        return manifest.kept(self.cfg)
+    def owned(self, key, file):
+        """A tab file in its doc's folder: docsync's, it follows the doc. Elsewhere: the project's, never moved."""
+        return manifest.owned(key, self.doc(key), file)
 
     def doc(self, key):
         return self.cfg["docs"][key]

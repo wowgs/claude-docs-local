@@ -100,7 +100,7 @@ def sync_widgets(P, key, e, doc_id, t, mode, force, fetched=None):
         elif loc and rem and not force:
             out.ev("conflict", label, "diagram changed locally and in the doc · nothing done")
             conflict = True
-        elif loc and mode in ("sync", "push") and not (rem and mode == "sync"):
+        elif loc and mode in ("sync", "push"):  # with --force also when the doc changed too: the local code wins
             push_widget(key, file, doc_id, info, wid, v.get("pub"))
             out.ev("pushed", label, f"diagram · publish {info['pub']}")
         elif rem and mode in ("sync", "pull"):

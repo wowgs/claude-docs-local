@@ -48,8 +48,8 @@ def project(path):
     write(STATE, json.dumps(st, ensure_ascii=False, indent=1))
     if os.path.exists(".docsync-last.json"):
         os.replace(".docsync-last.json", PUSH)
-    save({"schema": SCHEMA, **({"name": cfg["name"]} if cfg.get("name") else {}), "files": "managed", "docs": docs},
-         path)
+    save({"schema": SCHEMA, **({"name": cfg["name"]} if cfg.get("name") else {}),
+          "conflicts": cfg.get("conflicts", "merge"), "docs": docs}, path)
     for p in olds + [".docsync-lock"]:
         to_trash(p)
     ensure_gitignore()

@@ -18,6 +18,7 @@ A doc's key is its key in `docsync.json`; `docsync doc add` and `docsync doc imp
 | --- | --- |
 | a tab | its `.md` file, at the path in `docsync.json` |
 | a new tab | `<doc's dir>/<number>-<words>.md`, with `# <tab name>` as its first line |
+| who may move a tab file | docsync renames and deletes only files in their doc's `dir`; a file elsewhere (such as `README.md`) stays where it is |
 | the chips of a tab | `.docsync/<doc key>/<tab>.blocks.json` (`<tab>` = the tab file's name without `.md`) |
 | a diagram of a tab | its code in `.docsync/<doc key>/<tab>.widget-<id>.jsx`; in the md, its picture line |
 | a new diagram | its code in `.docsync/<doc key>/<tab>.widget-new-<name>.jsx`, its chip in that tab's `blocks.json`, its placeholder in the md |
@@ -43,7 +44,7 @@ docsync does not move your files: a file stays where you put it. A new diagram n
 
 Only docsync writes `docsync.json`; use these commands for it.
 
-- **New tab:** a new `.md` with `# <tab name>` as its first line. It can carry new diagrams, not ones of other tabs. A file in the doc's `dir` becomes a tab by itself, unless `docsync.json` has `"files": "kept"`. Otherwise run `docsync tab add <file> [--doc <doc key>] [--parent <tab file>]`.
+- **New tab:** a new `.md` with `# <tab name>` as its first line. It can carry new diagrams, not ones of other tabs. A file in the doc's `dir` becomes a tab by itself. For a file elsewhere run `docsync tab add <file> [--doc <doc key>] [--parent <tab file>]`.
 - **Tab under another tab:** `docsync tab parent <file> <parent tab file>`; without the parent, it moves to the top.
 - **Rename a tab:** edit its `# heading`.
 - **Delete a tab:** delete its file.
