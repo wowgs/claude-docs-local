@@ -110,6 +110,12 @@ def rows_of(text):
     return rows
 
 
+def aligns_of(text):
+    """A markdown table's separator row as each column's alignment (:--, :-:, --: or ---)."""
+    cells = [c.strip() for c in text.split("\n")[1].strip().strip("|").split("|")]
+    return [(":-" if c.startswith(":") else "--") + (":" if c.endswith(":") and len(c) > 1 else "-") for c in cells]
+
+
 def head_and_rest(lines):
     """An item's lines up to its first blank line (its first paragraph), and the rest (its other blocks)."""
     n = next((k for k, l in enumerate(lines) if not l.strip()), len(lines))

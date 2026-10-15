@@ -11,10 +11,10 @@ changed, inserts and deletes whole blocks, items and rows, and replaces a whole 
 Every op may detach comments (allowDetach): by design a push may lose a comment whose words it removes."""
 import difflib, json, re
 
-from .blocks import (ITEM, head_and_rest, item_body, items_of, kind_of, list_kind, plain, rows_of, simple,
+from .blocks import (ITEM, aligns_of, head_and_rest, item_body, items_of, kind_of, list_kind, plain, rows_of, simple,
                      split_blocks)
 from .compare import compare_lines
-from .markdown import Md, blocks_of
+from .markdown import Md, aligns, blocks_of
 from .tree import elements, parse
 from .write import CAP, md_source
 
@@ -83,9 +83,6 @@ class Plan:
             g["ifHash"] = el["attrs"]["h"]
         return g
 
-    def text(self, el):
-        return "\n".join(self.md.block(el))
-
     def replace(self, el, md):
         """Replace one block by id: a paragraph keeps its unchanged words, any other block is made anew."""
         self.replaces.append({"op": "replace", "target": {"kind": "blocks", "ids": [el["attrs"]["id"]]},
@@ -115,7 +112,7 @@ class Plan:
     def blocks(self, md):
         old = blocks_of(self.doc)
         new = split_blocks(md)
-        old_text = [self.text(el) for el in old]
+        old_text = ["\n".join(lines) for lines in self.md.render_blocks(old)]  # as the doc's markdown has them
         pairs = align([key(t, self.md.blocks) for t in old_text], [key(t, self.chips) for t in new],
                       [kind_of_el(el) for el in old], [kind_of(t, self.chips) for t in new])
         for after, run in runs(pairs, old):
@@ -188,10 +185,10 @@ class Plan:
 
     def table(self, el, text):
         """Edit a table row by row and cell by cell; False when only a whole replace can do it (another number of
-        columns, a changed cell with several paragraphs or emptied)."""
+        columns or another alignment, a changed cell with several paragraphs or emptied)."""
         new = rows_of(text)
         old = elements(el)
-        if not new or not old:
+        if not new or not old or aligns_of(text) != aligns(el):
             return False
         old_cells = [self.md.cells(r) for r in old]
         cols = len(old_cells[0])

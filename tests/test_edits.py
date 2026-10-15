@@ -100,6 +100,16 @@ class Plan(unittest.TestCase):
         ops = plan(MD.replace("Last.", "> Last."))
         self.assertEqual([(o["op"], o["target"]["ids"]) for o in ops], [("insert", ["a.19"]), ("delete", ["a.19"])])
 
+    def test_two_adjacent_lists_read_back_as_written_need_no_edit(self):
+        xml = ("<doc><list id='a.1' h='h1' kind='bullet'><listItem id='.2'><paragraph id='.3'><text>a</text></paragraph>"
+               "</listItem></list><list id='.4' h='h4' kind='bullet'><listItem id='.5'><paragraph id='.6'><text>b</text>"
+               "</paragraph></listItem></list></doc>")
+        self.assertEqual(edits.plan(xml, 1, "- a\n\n* b\n", {}), [])
+
+    def test_a_table_with_another_alignment_is_replaced_whole(self):
+        ops = plan(MD.replace("| --- | --- |", "| :-: | --- |"))
+        self.assertEqual([(o["op"], o["target"]["ids"]) for o in ops], [("replace", ["a.8"])])
+
     def test_an_inserted_run_larger_than_one_write_is_cut(self):
         big = "\n\n".join("p%d " % n + "x" * 1000 for n in range(40))
         ops = plan(MD + "\n" + big + "\n")

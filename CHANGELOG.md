@@ -2,6 +2,13 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.3 — 2026-10-15
+
+- A tilde in the doc's text no longer turns into strikethrough after a push. The doc strikes both `~x~` and `~~x~~`. A pull now escapes the tildes of a paragraph (`\~`) when two of them could pair up. A lone tilde (`~/src`) and tildes with spaces on both sides stay as they are.
+- Two lists of the same kind, one right after the other, no longer merge into one list after a push. The second one takes the other marker: `*` for `-`, `1)` for `1.`. The doc reads them back as two lists.
+- A table keeps the alignment of its columns. The separator row shows it (`:--`, `:-:`, `--:`), from the cells of the first row. A table whose alignment was changed locally is written whole.
+- Checked on a test doc: a tab with these three read back with no edit to send, and the same markdown pushed as a new tab read back as written. All 22 synced tabs of three projects read back the same as before.
+
 ## 2.6.2 — 2026-10-15
 
 - One tab that docsync cannot handle no longer stops the sync of the whole project. The sync names that tab ("not synced: …"), leaves it as it is, and goes on with the other tabs and docs.

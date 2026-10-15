@@ -85,6 +85,26 @@ class ToMarkdown(unittest.TestCase):
         self.assertEqual(m.to_markdown(xml)[0], "**core sets `AX_On`,** then *one **two** three*\n\n"
                                                 "[see `x`](https://e.x) and **a**<?claude block c1?>**b**\n")
 
+    def test_tildes_that_could_pair_are_escaped_and_a_lone_one_is_not(self):
+        para = lambda t: m.to_markdown(f"<doc><paragraph id='a.1'><text>{t}</text></paragraph></doc>")[0]
+        self.assertEqual(para("one ~x~ two ~~y~~"), "one \\~x\\~ two \\~\\~y\\~\\~\n")
+        self.assertEqual(para("see ~/src"), "see ~/src\n")
+        self.assertEqual(para("a ~ b ~ c"), "a ~ b ~ c\n")
+
+    def test_a_list_right_after_a_list_of_its_kind_takes_the_other_marker(self):
+        li = lambda t, c="": f"<listItem{c}><paragraph><text>{t}</text></paragraph></listItem>"
+        xml = ("<doc><list id='a.1' kind='bullet'>" + li("a") + "</list><list id='.2' kind='bullet'>" + li("b") + "</list>"
+               "<list id='.3' kind='bullet'>" + li("c") + "</list><list id='.4' kind='ordered'>" + li("d") + "</list>"
+               "<list id='.5' kind='ordered'>" + li("e") + "</list><list id='.6' kind='check'>" + li("f") + "</list>"
+               "<list id='.7' kind='check'>" + li("g", " checked='true'") + "</list></doc>")
+        self.assertEqual(m.to_markdown(xml)[0], "- a\n\n* b\n\n- c\n\n1. d\n\n1) e\n\n- [ ] f\n\n* [x] g\n")
+
+    def test_column_alignment_is_written_in_the_separator_row(self):
+        cell = lambda t, a: f"<cell header='true'{a}><paragraph><text>{t}</text></paragraph></cell>"
+        xml = ("<doc><table id='a.1'><row>" + cell("L", " align='left'") + cell("C", " align='center'") +
+               cell("R", " align='right'") + cell("N", "") + "</row></table></doc>")
+        self.assertEqual(m.to_markdown(xml)[0], "| L | C | R | N |\n| :-- | :-: | --: | --- |\n")
+
     def test_unknown_block_is_refused(self):
         with self.assertRaises(Unsupported):
             m.to_markdown("<doc><quote id='a.1'/></doc>")
