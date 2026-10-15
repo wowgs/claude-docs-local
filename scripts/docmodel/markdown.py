@@ -96,7 +96,7 @@ class Md:
             t, m = runs[i]
             marks = [x for x in m if x != "code"] if t is not None else []
             if not marks:
-                out.append(m if t is None else "`" + t + "`" if "code" in m else esc(t, in_table, tilde))
+                out.append(m if t is None else code_span(t) if "code" in m else esc(t, in_table, tilde))
                 i += 1
                 continue
 
@@ -184,6 +184,14 @@ class Md:
 
 OUTER = ("link", "bold", "italic", "strike")  # outside first when two marks span as many runs; code is innermost
 WRAP = {"bold": ("**", "**"), "italic": ("*", "*"), "strike": ("~~", "~~")}
+
+
+def code_span(text):
+    """Code as markdown: its fence is one backtick longer than the longest run of backticks in it, with a space
+    inside when it starts or ends with a backtick (CommonMark strips that space)."""
+    fence = "`" * (max((len(r) for r in re.findall(r"`+", text)), default=0) + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return fence + pad + text + pad + fence
 
 
 def _kind(mark):

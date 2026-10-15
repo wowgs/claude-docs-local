@@ -264,5 +264,12 @@ class Helpers(unittest.TestCase):
         self.assertIsNone(compare.h1("## not h1"))
 
 
+
+class CodeWithBackticks(unittest.TestCase):
+    def test_code_that_holds_backticks_gets_a_longer_fence(self):
+        xml = "<doc><paragraph id='a.1'><text>a </text><text><code>`x`</code></text><text> b </text><text><code>p``q</code></text></paragraph></doc>"
+        md = m.to_markdown(xml)[0]
+        self.assertEqual(md, "a `` `x` `` b ```p``q```\n")
+
 if __name__ == "__main__":
     unittest.main()

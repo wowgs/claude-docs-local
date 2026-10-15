@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.9 — 2026-10-15
+
+- Code that holds backticks, such as `` `x` ``, now reads back as written. docsync wrote any code between single backticks, so code with a backtick in it became other markdown, and a push of a tab with such code ended with "written, but the doc DIFFERS". Now the fence is one backtick longer than the longest run of backticks in the code, with a space inside when the code starts or ends with a backtick.
+- Checked on 2026-10-15: a push of the tab "3.6 Claude Docs features" of this repository's HLD reported DIFFERS for a cell with `` `<?claude block …?>` ``; the doc kept the backticks, and with the fix the local file and the tab read the same. A test covers it.
+
 ## 2.6.8 — 2026-10-15
 
 - In a Claude Code session, docsync can read a long tab again. Claude Code gives a hooks module a tool result over about 64,000 characters as an error text: "Error: result (N characters) exceeds maximum allowed tokens. Output has been saved to <file>". docsync took that text for a refusal, and the sync of a doc with such a tab stopped with "read refused". Now docsync reads the whole result from that file. When the file is gone, a read is sent again with docsync's own login. A write is not sent again, since it may have been done.
