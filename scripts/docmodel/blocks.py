@@ -1,11 +1,12 @@
 """The local markdown cut the way the doc's markdown is cut: top-level blocks, list items, table rows and cells."""
 import re
 
-from .markdown import CHIP
+from .markdown import ATTR_LINE, CHIP, split_attrs
+from .write import server_md
 
 ITEM = re.compile(r"(?:[-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?")
 FENCE = re.compile(r"\s*(`{3,})")
-STARTS = re.compile(r"#{1,6}\s|(?:[-*+]|\d+[.)])\s|\||`{3}|>")  # a line that starts a block after a paragraph line
+STARTS = re.compile(r"#{1,6}\s|(?:[-*+]|\d+[.)])\s|\||`{3}|>|<!-- docsync ")  # a line that starts a block after a paragraph line
 
 
 def split_blocks(md):
@@ -30,7 +31,7 @@ def split_blocks(md):
             blank = True
             cur.append(l)
             continue
-        first = next((c for c in cur if c.strip()), None)
+        first = next((c for c in cur if c.strip() and not ATTR_LINE.match(c)), None)
         if cur and ((blank and not l[:1].isspace()) or (first is not None and kind_of(first) == "heading")
                     or (first is not None and kind_of(first) == "paragraph" and STARTS.match(l))
                     or (first is not None and kind_of(first) == "table" and not l.startswith("|"))):
@@ -44,6 +45,7 @@ def split_blocks(md):
 
 
 def kind_of(text, chips=None):
+    text = split_attrs(text)[1]
     first = text.split("\n", 1)[0]
     if re.match(r"#{1,6}\s", first):
         return "heading"
@@ -124,7 +126,7 @@ def head_and_rest(lines):
 
 def plain(md):
     """Markdown inline text as plain text, near enough for a first write (the next pass fixes the rest)."""
-    s = CHIP.sub("", md)
+    s = CHIP.sub("", server_md(md))
     s = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s)
     s = re.sub(r"(?<!\\)(\*\*|~~|`|\*)", "", s)
     return re.sub(r"\\(.)", r"\1", s)

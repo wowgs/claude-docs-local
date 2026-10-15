@@ -2,10 +2,10 @@
 import re
 
 from .errors import NotPushable
-from .markdown import CELL_BREAK, CHIP
+from .markdown import ATTR_LINE, CELL_BREAK, CODE_SPAN, chip_keys, outside_code
 
 CAP = 30000  # server cap is 32768 bytes of inline content per write
-CODE_SPAN = re.compile(r"(?<!\\)(`+)(?:(?!\1).)+?\1")
+TAGS = re.compile(r"(?<!\\)</?(?:u|mark)>")  # underline and highlight: the doc's markdown does not read them
 
 
 def check_pushable(md, where):
@@ -17,9 +17,16 @@ def check_pushable(md, where):
                               "written back; make it one paragraph, or edit that cell in the doc")
 
 
+def server_md(md):
+    """Markdown as the doc's markdown reads it: without the lines of block attributes and the <u> and <mark> tags
+    (their text stays). The next pass of a push writes those with `set` and `as: blocks`."""
+    md = "\n".join(l for l in md.split("\n") if not ATTR_LINE.match(l))
+    return outside_code(md, lambda s: TAGS.sub("", s))
+
+
 def md_source(part, blocks):
-    used = {k: blocks[k] for k in CHIP.findall(part)}
-    return {"as": "markdown", "from": {"kind": "inline", "content": part}, **({"blocks": used} if used else {})}
+    used = {k: blocks[k] for k in chip_keys(part) if k in blocks}
+    return {"as": "markdown", "from": {"kind": "inline", "content": server_md(part)}, **({"blocks": used} if used else {})}
 
 
 def chunks(md):

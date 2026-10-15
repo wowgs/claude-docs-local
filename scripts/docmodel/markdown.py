@@ -1,5 +1,5 @@
 """The doc's XML as markdown plus chips: what a tab's local file holds."""
-import re
+import json, re
 
 from .errors import Unsupported
 from .tree import elements, parse, strings
@@ -7,6 +7,60 @@ from .tree import elements, parse, strings
 ESC = re.compile(r"([\\`*_\[\]<>#|])")
 CHIP = re.compile(r"<\?claude block (\w+)\?>")
 CELL_BREAK = "<br>"  # several paragraphs (or a line break) in one table cell: no markdown the server reads back
+CODE_SPAN = re.compile(r"(?<!\\)(`+)(?:(?!\1).)+?\1")
+FENCE_LINE = re.compile(r"\s*(`{3,})")
+ATTR_LINE = re.compile(r"\s*<!-- docsync (\{.*\}) -->\s*$")  # attributes of the block below it that markdown has no syntax for
+
+
+def outside_code(md, fn):
+    """md with fn applied to each piece of a line outside fenced code and code spans: a chip placeholder or a tag
+    inside code is text (the doc keeps `<?claude block x?>` in a code span as those characters)."""
+    out, fence = [], None
+    for line in md.split("\n"):
+        f = FENCE_LINE.match(line)
+        if fence:
+            out.append(line)
+            if f and line.strip() == f.group(1) and len(f.group(1)) >= len(fence):
+                fence = None
+            continue
+        if f:
+            fence = f.group(1)
+            out.append(line)
+            continue
+        parts, last = [], 0
+        for m in CODE_SPAN.finditer(line):
+            parts += [fn(line[last:m.start()]), m.group(0)]
+            last = m.end()
+        out.append("".join(parts + [fn(line[last:])]))
+    return "\n".join(out)
+
+
+def sub_chips(md, repl):
+    """CHIP.sub outside code."""
+    return outside_code(md, lambda s: CHIP.sub(repl, s))
+
+
+def chip_keys(md):
+    """The chip keys that md uses, outside code, in order."""
+    keys = []
+    sub_chips(md, lambda m: keys.append(m.group(1)) or m.group(0))
+    return keys
+
+
+def attrs_line(attrs):
+    return "<!-- docsync " + json.dumps(attrs, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + " -->"
+
+
+def split_attrs(text):
+    """A block's text as (its attributes from the line above it, the block without that line)."""
+    first, _, rest = text.partition("\n")
+    m = ATTR_LINE.match(first)
+    if not m:
+        return {}, text
+    try:
+        return json.loads(m.group(1)), rest
+    except ValueError:
+        return {}, text
 
 
 def esc(s, in_table, tilde=False):
@@ -41,12 +95,12 @@ class Md:
         for c in el["children"]:
             if isinstance(c, str):
                 out.append((c, marks))
-            elif c["tag"] in ("bold", "italic", "code", "strike"):
+            elif c["tag"] in ("bold", "italic", "code", "strike", "underline", "highlight"):
                 out += self.runs(c, marks + (c["tag"],))
             elif c["tag"] == "link":
                 out += self.runs(c, marks + (("link", c["attrs"]["href"]),))
-            else:  # a mark markdown has no syntax for (underline, highlight): its text without it; the doc keeps
-                out += self.runs(c, marks)  # the mark until this paragraph is edited locally
+            else:  # a mark docsync has no syntax for: its text without it; the doc keeps the mark until this
+                out += self.runs(c, marks)  # paragraph is edited locally
         return out
 
     def inline(self, el, in_table=False):
@@ -96,7 +150,7 @@ class Md:
             t, m = runs[i]
             marks = [x for x in m if x != "code"] if t is not None else []
             if not marks:
-                out.append(m if t is None else "`" + t + "`" if "code" in m else esc(t, in_table, tilde))
+                out.append(m if t is None else code_span(t) if "code" in m else esc(t, in_table, tilde))
                 i += 1
                 continue
 
@@ -134,7 +188,8 @@ class Md:
             spec = {"type": "embed", "ref": a["ref"]}
             if "caption" in a:
                 spec["caption"] = a["caption"]
-            return [indent + self.chip(spec)]
+            extra = embed_attrs(el)
+            return ([indent + attrs_line(extra)] if extra else []) + [indent + self.chip(spec)]
         if tag == "list":
             kind = el["attrs"].get("kind", "bullet")
             lines = []
@@ -142,10 +197,13 @@ class Md:
                 lines += self.item(item, bullet(kind, n, item, alt), indent)
             return lines
         if tag == "table":
-            # A table without a header row: its first row is written as the header, the only table markdown has;
-            # the doc keeps the table as it is until it is edited locally.
-            rows = [self.cells(row) for row in elements(el)]
-            lines = [row_line(rows[0]), row_line(aligns(el))] + [row_line(r) for r in rows[1:]]
+            # A table without a header row: its first row is written as the header, the only table markdown has,
+            # and the line above the table says {"header": false}. A merged cell is its text in its first column
+            # and row, the cells it covers are empty, and the line above gives its "spans".
+            rows = self.grid(el)
+            extra = table_attrs(el)
+            lines = ([attrs_line(extra)] if extra else []) + [row_line(rows[0]), row_line(aligns(el))] + \
+                [row_line(r) for r in rows[1:]]
             return [indent + l for l in lines]
         if tag == "blockquote":
             inner = []
@@ -179,11 +237,29 @@ class Md:
 
     def cells(self, row):
         """A table row's cells as markdown."""
-        return [CELL_BREAK.join(self.inline(p, in_table=True) for p in elements(cell)) for cell in elements(row)]
+        return [self.cell(cell) for cell in elements(row)]
+
+    def cell(self, cell):
+        return CELL_BREAK.join(self.inline(p, in_table=True) for p in elements(cell))
+
+    def grid(self, table):
+        """The table's rows of cells as markdown, one per column: a cell that a merged cell covers is empty."""
+        rows, anchors, ncols = table_grid(table)
+        return [[self.cell(anchors[(r, c)]) if (r, c) in anchors else "" for c in range(ncols)]
+                for r in range(len(rows))]
 
 
-OUTER = ("link", "bold", "italic", "strike")  # outside first when two marks span as many runs; code is innermost
-WRAP = {"bold": ("**", "**"), "italic": ("*", "*"), "strike": ("~~", "~~")}
+OUTER = ("link", "bold", "italic", "strike", "underline", "highlight")  # outside first when two marks span as many
+WRAP = {"bold": ("**", "**"), "italic": ("*", "*"), "strike": ("~~", "~~"),  # runs; code is innermost
+        "underline": ("<u>", "</u>"), "highlight": ("<mark>", "</mark>")}
+
+
+def code_span(text):
+    """Code as markdown: its fence is one backtick longer than the longest run of backticks in it, with a space
+    inside when it starts or ends with a backtick (CommonMark strips that space)."""
+    fence = "`" * (max((len(r) for r in re.findall(r"`+", text)), default=0) + 1)
+    pad = " " if text.startswith("`") or text.endswith("`") else ""
+    return fence + pad + text + pad + fence
 
 
 def _kind(mark):
@@ -215,7 +291,66 @@ ALIGN = {"left": ":--", "center": ":-:", "right": "--:"}
 
 def aligns(table):
     """The separator row of a table: each column's alignment, from the cells of its first row."""
-    return [ALIGN.get(c["attrs"].get("align"), "---") for c in elements(elements(table)[0])]
+    _, anchors, ncols = table_grid(table)
+    return [ALIGN.get(((anchors.get((0, c)) or {}).get("attrs") or {}).get("align"), "---") for c in range(ncols)]
+
+
+def table_grid(table):
+    """(rows, {(row, column): cell} for the cell that starts at each position, number of columns). A cell with
+    colspan or rowspan covers the positions right of and below it."""
+    rows = elements(table)
+    taken, anchors, ncols = set(), {}, 0
+    for r, row in enumerate(rows):
+        c = 0
+        for cell in elements(row):
+            while (r, c) in taken:
+                c += 1
+            cs, rs = int(cell["attrs"].get("colspan", 1)), int(cell["attrs"].get("rowspan", 1))
+            anchors[(r, c)] = cell
+            taken |= {(r + dr, c + dc) for dr in range(rs) for dc in range(cs)}
+            c += cs
+        ncols = max([ncols] + [cc + 1 for rr, cc in taken if rr == r])
+    return rows, anchors, ncols
+
+
+def number(v):
+    return int(v) if isinstance(v, str) and v.isdigit() else v
+
+
+def embed_attrs(el):
+    """An embed's attributes that its chip does not carry: its width and alignment on the page."""
+    return {k: number(el["attrs"][k]) for k in ("width", "align") if k in el["attrs"]}
+
+
+def table_attrs(table):
+    """A table's attributes that markdown has no syntax for: no header row, column widths, cells aligned other than
+    their column, merged cells. Positions are "row,column" of the grid, from 0."""
+    _, anchors, ncols = table_grid(table)
+    out = {}
+    if not any((anchors.get((0, c)) or {"attrs": {}})["attrs"].get("header") == "true" for c in range(ncols)):
+        out["header"] = False
+    widths = [None] * ncols
+    for (r, c), cell in sorted(anchors.items()):
+        try:
+            ws = json.loads(cell["attrs"].get("colwidth", "null")) or []
+        except ValueError:
+            ws = []
+        for k, w in enumerate(ws):
+            if c + k < ncols and widths[c + k] is None and w:
+                widths[c + k] = w
+    if any(widths):
+        out["widths"] = widths
+    column = [((anchors.get((0, c)) or {"attrs": {}})["attrs"].get("align")) for c in range(ncols)]
+    over = {f"{r},{c}": cell["attrs"].get("align") for (r, c), cell in sorted(anchors.items())
+            if cell["attrs"].get("align") != column[c]}
+    if over:
+        out["align"] = over
+    spans = {f"{r},{c}": [int(cell["attrs"].get("colspan", 1)), int(cell["attrs"].get("rowspan", 1))]
+             for (r, c), cell in sorted(anchors.items())
+             if (cell["attrs"].get("colspan", "1"), cell["attrs"].get("rowspan", "1")) != ("1", "1")}
+    if spans:
+        out["spans"] = spans
+    return out
 
 
 def row_line(cells):

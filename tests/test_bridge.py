@@ -92,3 +92,23 @@ class Absent(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LargeResults(unittest.TestCase):
+    """Claude Code gives a module a result over about 64,000 characters as an error text naming a saved copy."""
+
+    def test_the_saved_copy_is_read_and_a_lost_one_is_a_read_again(self):
+        import json, tempfile
+        from docsynclib import bridge
+        content = [{"type": "text", "text": "x" * 70000}]
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            json.dump(content, f)
+        note = lambda p: {"content": [{"type": "text", "text": f"Error: result (70,021 characters) exceeds maximum "
+                                       f"allowed tokens. Output has been saved to {p}.\nFormat: JSON array"}]}
+        self.assertEqual(bridge.whole(note(f.name), "read"), {"content": content})
+        os.remove(f.name)
+        self.assertIsNone(bridge.whole(note(f.name), "read"))
+        with self.assertRaises(SystemExit):
+            bridge.whole(note(f.name), "update")
+        small = {"content": [{"type": "text", "text": '{"verdict": "allow"}'}]}
+        self.assertIs(bridge.whole(small, "read"), small)

@@ -1,5 +1,7 @@
-"""A doc's local folder: tab files, their names, the sync state, the trash."""
-import datetime, json, os, re, sys
+"""Where a project's files are: tab files at the paths of the manifest; docsync's own files under .docsync/ (the
+chips, diagram code and pictures of each tab in .docsync/<doc key>/, the sync state, the background push); the
+trash. Paths are relative to the project root, which is the working folder."""
+import datetime, json, os, re
 
 from . import output as out
 from docmodel.compare import sha
@@ -9,7 +11,13 @@ TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэю�
               ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t",
                "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"]))
 NUM = re.compile(r"^\s*(\d+(?:\.\d+)*)\.?\s+")
+SVC = ".docsync"
+STATE = os.path.join(SVC, "state.json")  # this machine's sync state: not in git
+PUSH = os.path.join(SVC, "push.json")  # the last background push (mode auto-force): not in git
+LOCK = os.path.join(SVC, "lock")
 TRASH = os.path.join(".docsync-trash", datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S"))
+IGNORE = ["/.docsync/state.json", "/.docsync/push.json", "/.docsync/lock", "/.docsync-trash/"]
+FMT = 3  # how pull writes a tab's file; a clean tab written by an older format is pulled again
 
 
 def slug(name):
@@ -32,87 +40,77 @@ def base_for(name, old=None):
     return f"{num}-{w}" if num else w
 
 
+def base(file):
+    """A tab file's name without .md: what its own files in .docsync/<doc key>/ are named by."""
+    return os.path.splitext(os.path.basename(file))[0]
+
+
+def posix(path):
+    return path.replace(os.sep, "/")
+
+
+# a tab's own files, in .docsync/<doc key>/
+
+def svc_dir(key):
+    return os.path.join(SVC, key)
+
+
+def blocks_path(key, file):
+    return os.path.join(svc_dir(key), base(file) + ".blocks.json")
+
+
+def widget_path(key, file, wid):
+    return os.path.join(svc_dir(key), f"{base(file)}.widget-{wid}.jsx")
+
+
+def preview_path(key, file, wid):
+    return os.path.join(svc_dir(key), f"{base(file)}.widget-{wid}.png")
+
+
+def new_widget_path(key, file, name):
+    return os.path.join(svc_dir(key), f"{base(file)}.widget-new-{name}.jsx")
+
+
+def own_files(key, file):
+    """The tab's files in .docsync/<doc key>/: chips, diagram code, pictures."""
+    d, pre = svc_dir(key), base(file) + "."
+    if not os.path.isdir(d):
+        return []
+    return [os.path.join(d, f) for f in sorted(os.listdir(d))
+            if f == pre + "blocks.json" or (f.startswith(pre + "widget-") and f.endswith((".jsx", ".png")))]
+
+
+def tab_files(key, file):
+    return [file] + own_files(key, file)
+
+
 def read_text(p):
     return read(p) if os.path.exists(p) else None
 
 
-def state_path(d):
-    return os.path.join(d, ".docsync-state.json")
+def local_hash(key, file):
+    return sha(read_text(file) or "", read_text(blocks_path(key, file)) or "")
 
 
-def load_state(d):
-    p = state_path(d)
-    return load_json(p) if os.path.exists(p) else {"tabs": {}}
-
-
-def save_state(d, st):
-    write(state_path(d), json.dumps(st, ensure_ascii=False, indent=1))
-
-
-def local_hash(d, base):
-    md = read_text(os.path.join(d, base + ".md")) or ""
-    bl = read_text(os.path.join(d, base + ".blocks.json")) or ""
-    return sha(md, bl)
-
-
-def widget_files(d, base):
-    pre = base + ".widget-"
-    return sorted(f for f in os.listdir(d) if f.startswith(pre) and f.endswith(".jsx"))
-
-
-def tab_files(d, base):
-    return [os.path.join(d, base + ".md"), os.path.join(d, base + ".blocks.json")] + \
-           [os.path.join(d, f) for f in widget_files(d, base)]
-
-
-def widgets_changed(d, t):
+def widgets_changed(key, file, t):
     return [w for w, info in t.get("widgets", {}).items()
-            if sha(read_text(os.path.join(d, info["file"])) or "") != info["hash"]]
+            if sha(read_text(widget_path(key, file, w)) or "") != info["hash"]]
 
 
-def local_changed(d, t):
-    return local_hash(d, t["base"]) != t["hash"] or bool(widgets_changed(d, t))
+def local_changed(key, file, t):
+    return local_hash(key, file) != t["hash"] or bool(widgets_changed(key, file, t))
 
 
-def move_tab_files(d, t, nb):
-    """Rename a tab's files to a new base and follow it in the state."""
-    ob = t["base"]
-    for f in tab_files(d, ob):
-        dst = os.path.join(d, nb + os.path.basename(f)[len(ob):])
-        if os.path.exists(f) and not os.path.exists(dst):
+def move_tab_files(key, old, new):
+    """Rename a tab's file and its own files (managed files)."""
+    if os.path.exists(old) and not os.path.exists(new):
+        os.makedirs(os.path.dirname(new) or ".", exist_ok=True)
+        os.replace(old, new)
+    ob, nb = base(old), base(new)
+    for f in own_files(key, old):
+        dst = os.path.join(os.path.dirname(f), nb + os.path.basename(f)[len(ob):])
+        if not os.path.exists(dst):
             os.replace(f, dst)
-    for info in t.get("widgets", {}).values():
-        info["file"] = nb + info["file"][len(ob):]
-    t["base"] = nb
-
-
-def adopt_renamed(d, st):
-    """Tab files renamed by hand: a tab whose .md is gone follows the one new .md with the same words
-    (or, failing that, the same text), so the rename is not taken for a deleted tab plus a new one."""
-    known = {t["base"] for t in st["tabs"].values()}
-    new = [f[:-3] for f in sorted(os.listdir(d)) if f.endswith(".md") and f[:-3] not in known]
-    for t in st["tabs"].values():
-        ob = t["base"]
-        if not new or os.path.exists(os.path.join(d, ob + ".md")):
-            continue
-        hits = [b for b in new if words(b) == words(ob)] or [b for b in new if local_hash(d, b) == t["hash"]]
-        if len(hits) != 1:
-            continue
-        nb = hits[0]
-        new.remove(nb)
-        move_tab_files(d, t, nb)
-        out.ev("info", f"{d}/{nb}", f"files renamed from {ob}")
-
-
-def local_tab(d, base):
-    """A tab not yet in the doc: its markdown, chips and name (from its `# heading`)."""
-    md = read_text(os.path.join(d, base + ".md")) or ""
-    blocks = json.loads(read_text(os.path.join(d, base + ".blocks.json")) or "{}")
-    if any(v.get("type") == "embed" and not v.get("ref", "").startswith("node/new-") for v in blocks.values()):
-        sys.exit(f"{d}/{base}.md: a new tab cannot show a diagram of another tab; make its own "
-                 f"({base}.widget-new-<name>.jsx + a chip with ref node/new-<name>)")
-    m = re.search(r"^# (.+)$", md, re.M)
-    return md, blocks, (m.group(1).strip() if m else base.replace("-", " "))
 
 
 def to_trash(path):
@@ -121,3 +119,44 @@ def to_trash(path):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         os.replace(path, dst)
         return dst
+
+
+# the sync state: .docsync/state.json
+
+def load_state():
+    """{"schema": 2, "docs": {"<doc key>": {"id": "<doc id>", "tabs": {"<tab id>": {"name", "node", "rev", "hash",
+    "widgets": {"<widget id>": {"pub", "hash"}}, "h1", "dhash", "fmt", "parent", "conflict_rev"}}}}}"""
+    st = load_json(STATE) if os.path.exists(STATE) else {}
+    st.setdefault("schema", 2)
+    st.setdefault("docs", {})
+    return st
+
+
+def save_state(st):
+    os.makedirs(SVC, exist_ok=True)
+    write(STATE, json.dumps(st, ensure_ascii=False, indent=1))
+    ensure_gitignore()
+
+
+def in_git():
+    d = os.path.abspath(".")
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            return True
+        up = os.path.dirname(d)
+        if up == d:
+            return False
+        d = up
+
+
+def ensure_gitignore():
+    """docsync's files that belong to this machine stay out of git: added to the project's .gitignore once."""
+    if not in_git():
+        return
+    have = read_text(".gitignore") or ""
+    lines = have.split("\n")
+    missing = [p for p in IGNORE if p not in lines]
+    if missing:
+        sep = "" if not have or have.endswith("\n") else "\n"
+        write(".gitignore", have + sep + "# docs-local: this machine's sync state\n" + "\n".join(missing) + "\n")
+        out.ev("info", ".gitignore", "added docsync's own state files")

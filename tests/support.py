@@ -57,7 +57,10 @@ def xml_of(md):
             continue
         m = re.match(r"^(#+) (.*)$", b)
         head, text = (f" heading='{len(m.group(1))}'", m.group(2)) if m else ("", b)
-        out.append(f"<paragraph id='{'p' if n == 1 else ''}.{n}'{head}><text>{html.escape(text)}</text></paragraph>")
+        inner = "".join(f"<mention ref='{html.escape(p[3:].split('|')[0])}' label='{html.escape(p.split('|', 1)[1])}'/>"
+                        if p.startswith("@@[") else f"<text>{html.escape(p)}</text>"
+                        for p in re.split(r"(@@\[[^\]]*)\]", text) if p)  # @@[ref|label] is a mention
+        out.append(f"<paragraph id='{'p' if n == 1 else ''}.{n}'{head}>{inner}</paragraph>")
     return "<doc>" + "".join(out) + "</doc>"
 
 
@@ -72,6 +75,7 @@ class FakeDocs:
         self.full_reads = 0
         self.next_id = 1000
         self.comment_rows = {}  # node -> the comment rows under that tab's body
+        self.no_pictures = False
 
     def add_tab(self, tab_id, name, md, order=None):
         self.tabs[tab_id] = {"name": name, "order": order or f"a{len(self.tabs)}", "node": "n-" + tab_id,
@@ -97,8 +101,10 @@ class FakeDocs:
         ids = [i if not i.startswith(".") else "p" + i for i in ids]
 
         def made(source, keep=None):
-            md = re.sub(r"<\?claude block (\w+)\?>", lambda m: "EMBED " + source["blocks"][m.group(1)]["ref"],
-                        source["from"]["content"])
+            def chip(m):
+                spec = source["blocks"][m.group(1)]
+                return f"@@[{spec['ref']}|{spec.get('label', '')}]" if spec["type"] == "mention" else "EMBED " + spec["ref"]
+            md = re.sub(r"<\?claude block (\w+)\?>", chip, source["from"]["content"])
             out = []
             for e in re.findall(r"<paragraph id='[^']+'.*?</paragraph>|<embed id='[^']+'[^>]*/>", xml_of(md)):
                 self.next_id += 1
@@ -134,7 +140,8 @@ class FakeDocs:
         if tool == "read" and ref.get("object") == "project":
             return {"verdict": "allow", "value": {
                 "name": self.name,
-                "tabs": {k: {"order": t["order"]} for k, t in self.tabs.items()},
+                "tabs": {k: {"order": t["order"], **({"subtabOf": t["parent"]} if t.get("parent") else {})}
+                         for k, t in self.tabs.items()},
                 "files": [{"id": k, "name": t["name"], "content": {"id": t["node"], "engine": "prose"}}
                           for k, t in self.tabs.items()]}}
         if tool == "read" and ref.get("object") == "node" and (args.get("payload") or {}).get("kind") == "view":
@@ -142,6 +149,10 @@ class FakeDocs:
             if t is None:  # like the server: a deleted tab is refused
                 return {"verdict": "refused", "code": "not_found"}
             return {"verdict": "allow", "rev": t["rev"], "data": {"rev": t["rev"], "xml": "<doc/>", "complete": True}}
+        if tool == "read" and ref.get("object") == "node" and (args.get("payload") or {}).get("kind") == "screenshot":
+            if ref["id"] not in self.widgets or self.no_pictures:
+                return {"verdict": "refused", "code": "unavailable"}
+            return {"verdict": "allow", "value": {"kind": "screenshot"}, "_images": [b"PNG " + ref["id"].encode()]}
         if tool == "query" and args.get("object") == "utterance":
             return {"verdict": "allow", "rows": self.comment_rows.get(args["payload"]["under"]["id"], [])}
         if tool == "update" and ref.get("object") == "node" and args.get("engine") == "widget":
@@ -166,7 +177,9 @@ class FakeDocs:
             return {"verdict": "allow"}
         if tool == "update" and ref.get("object") == "project":
             for p in args["payload"]["patch"]:
-                if p["path"][0] == "tabs" and p["path"][2] in ("name", "order"):
+                if p["path"][0] == "tabs" and p["path"][2] == "subtabOf":
+                    self.tabs[p["path"][1]]["parent"] = p.get("value") if p["op"] == "set" else None
+                elif p["path"][0] == "tabs" and p["path"][2] in ("name", "order"):
                     self.tabs[p["path"][1]][p["path"][2]] = p["value"]
                 elif p["path"] == ["name"]:
                     self.name = p["value"]
@@ -191,5 +204,6 @@ class FakeDocs:
             md = args["batch"][1]["payload"]["source"]["from"]["content"]
             patch = args["batch"][3]["payload"]["patch"][0]["value"]
             self.add_tab(tab_id, patch["name"], md, patch["order"])
+            self.tabs[tab_id]["parent"] = patch.get("subtabOf")
             return {"verdict": "allow", "lids": {"f": tab_id, "n": "n-" + tab_id}}
         raise AssertionError(f"unexpected call {tool} {args}")

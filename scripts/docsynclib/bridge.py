@@ -14,7 +14,7 @@ POST /result/<id>  {"result": …} | {"unavailable": reason} | {"error": reason}
 call with its own login. "error": the tool may have run: docsync must not send it again.
 GET  /ping     -> 200 {"pump": seconds since the module last asked for work}
 """
-import http.client, http.server, json, os, queue, shutil, socket, socketserver, sys, tempfile, threading, time, uuid
+import http.client, http.server, json, os, queue, re, shutil, socket, socketserver, sys, tempfile, threading, time, uuid
 
 WAIT_S = 20     # how long GET /next holds the module before it answers 204
 CALL_S = 300    # how long a call waits for its result
@@ -137,6 +137,29 @@ class Conn(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 
+SAVED = re.compile(r"^Error: result \([\d,]+ characters\) exceeds maximum allowed tokens\. Output has been saved to (\S+?)\.?\n")
+READS = ("read", "query")  # the tools docsync calls that change nothing: safe to send again
+
+
+def whole(result, tool):
+    """The result as the tool gave it. Claude Code hands a module a large result (over about 64,000 characters, such as
+    a long tab) as an error text that names a file holding the whole content; that file is read. Without it, a read
+    is sent again with docsync's own login (None), and a write ends the run, since it may have been done."""
+    content = result.get("content") or []
+    text = content[0].get("text", "") if len(content) == 1 and content[0].get("type") == "text" else ""
+    m = SAVED.match(text)
+    if not m:
+        return result
+    try:
+        with open(m.group(1), encoding="utf-8") as f:
+            return {"content": json.load(f)}
+    except (OSError, ValueError):
+        if tool in READS:
+            return None
+        sys.exit(f"{tool}: the result was too large for this Claude Code session and its saved copy is gone: "
+                 f"{m.group(1)}")
+
+
 def call(tool, args):
     """A tool call through the session's bridge: the MCP result ({"content", "isError"}), or None when the tool was not
     called (DOCSYNC_BRIDGE unset or gone, no module, no Claude Docs connector): the caller then uses its own login.
@@ -157,7 +180,7 @@ def call(tool, args):
     finally:
         c.close()
     if "result" in out:
-        return out["result"]
+        return whole(out["result"], tool)
     if "error" in out:
         sys.exit(f"{tool}: the Claude Docs connector of this Claude Code session failed: {out['error']}")
     return None

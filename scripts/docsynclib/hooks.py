@@ -5,12 +5,14 @@ import argparse, json, os, subprocess, sys, time
 
 from . import output as out
 from .claude import decide, edit_json, lock, project_settings
-from .projects import CONFIG, load_user, project_of
+from .files import LOCK, PUSH, SVC
+from .manifest import CONFIG
+from .projects import mode_of, project_of
 from .push import HELD
 from .sync import cmd_sync, local_pending
 from .textio import load_json, write
 
-LAST = ".docsync-last.json"  # the last background push at the project root: {"running", "started"}, then its result
+LAST = PUSH  # the last background push: {"running", "started"}, then its result
 STUCK_S = 600  # a push still "running" after this long is reported as not finished
 WAIT_S = 0.5  # how often stop_wake looks at the background push
 GRACE_S = 10  # how long stop_wake waits for the Stop hook, which runs beside it, to start the push
@@ -38,13 +40,22 @@ def sync_now(root, force=False):
                 if e["kind"] in ("conflict", "warn")]
     return (2 if out.CONFLICTS else 1 if problems else 0), problems
 
+def created_docs():
+    """The docs this sync made: [{"doc", "url"}]."""
+    return [{"doc": e["doc"], "url": e["url"]} for e in out.EVENTS if e["kind"] == "created" and e.get("url")]
+
+def open_text(docs):
+    """For Claude: show each new doc in this session's Outputs, as after making a doc with the Docs tools."""
+    return ("The sync made new docs. Open each one once with the Artifact tool, action \"open\", so it shows in this "
+            "session's Outputs: " + ", ".join(f"{d['doc']} ({d['url']})" for d in docs) + ".")
+
 def stop_hook(event):
     """Stop hook: when Claude finishes a turn in a project with local edits, send them.
     Mode auto: sync now; a conflict or an error goes back to Claude once, so it fixes the files or tells the user.
     Mode auto-force: `push --force` in the background; stop_wake tells Claude when it fails, and a failure it could
     not report (Claude Code ended it, as `claude -p` does) is shown to the user at the end of the next turn."""
     root = project_of(event.get("cwd") or os.getcwd())
-    mode = load_user().get("sync")
+    mode = mode_of(root) if root else None
     if not root or mode not in ("auto", "auto-force"):
         return None
     os.chdir(root)
@@ -58,6 +69,7 @@ def stop_hook(event):
             last["shown"] = True
             write(LAST, json.dumps(last, ensure_ascii=False))
         if local_pending(CONFIG) and not (last and last.get("running") and not stuck):
+            os.makedirs(SVC, exist_ok=True)
             write(LAST, json.dumps({"running": True, "started": time.time()}))
             subprocess.Popen([sys.executable, SCRIPT, "push-background"], cwd=root, start_new_session=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -65,8 +77,11 @@ def stop_hook(event):
     if not local_pending(CONFIG):
         return None
     rc, problems = sync_now(root)
-    if rc == 0:
+    made = created_docs()
+    if rc == 0 and not made:
         return None
+    if rc == 0:
+        return {"decision": "block", "reason": "docs-local sync. " + open_text(made)}
     sent = [e["path"] for e in out.EVENTS if e["kind"] in ("pushed", "created")]
     conflicts = [e["path"] for e in out.EVENTS if e["kind"] == "conflict"]
     held = [e for e in out.EVENTS if e.get("asks")]
@@ -85,6 +100,8 @@ def stop_hook(event):
     if errors:
         parts.append("Errors: " + "; ".join(errors) + ". Fix the local files if the cause is in them, otherwise tell "
                      "the user.")
+    if made:
+        parts.append(open_text(made))
     return {"decision": "block", "reason": " ".join(parts)}
 
 def held_text(held):
@@ -109,7 +126,7 @@ def stop_wake(event):
     must do). The push runs in a process of its own, so it finishes even when Claude Code ends this hook early
     (`claude -p` does); then the next Stop shows the failure to the user instead."""
     root = project_of(event.get("cwd") or os.getcwd())
-    if not root or load_user().get("sync") != "auto-force":
+    if not root or mode_of(root) != "auto-force":
         return 0, ""
     os.chdir(root)
     t0 = time.time()
@@ -123,10 +140,12 @@ def stop_wake(event):
         if mine and time.time() - last["started"] > STUCK_S:  # the next Stop tells the user that it did not finish
             return 0, ""
         time.sleep(WAIT_S)
-    if not last.get("rc") or last.get("shown"):
+    if (not last.get("rc") and not last.get("created")) or last.get("shown"):
         return 0, ""
     last["shown"] = True
     write(LAST, json.dumps(last, ensure_ascii=False))
+    if not last.get("rc"):
+        return 2, "docs-local: " + open_text(last["created"])
     parts = ["docs-local: the background push after your last turn did not send everything."]
     if last.get("held"):
         parts.append(held_text(last["held"]))
@@ -134,6 +153,8 @@ def stop_wake(event):
     if errors:
         parts.append("Errors: " + "; ".join(errors) + ". Fix the local files if the cause is in them, otherwise tell "
                      "the user.")
+    if last.get("created"):
+        parts.append(open_text(last["created"]))
     return 2, "\n".join(parts)
 
 def hook_wake(args):
@@ -148,24 +169,27 @@ def hook_wake(args):
     sys.exit(code)
 
 def push_background(args):
-    """For the auto-force hook: push --force, one at a time per project, the result kept in .docsync-last.json."""
+    """For the auto-force hook: push --force, one at a time per project, the result kept in .docsync/push.json."""
     root = os.getcwd()
     marker = load_json(os.path.join(root, LAST)) if os.path.exists(os.path.join(root, LAST)) else {}
-    with open(os.path.join(root, ".docsync-lock"), "w", encoding="utf-8") as lock:
+    os.makedirs(os.path.join(root, SVC), exist_ok=True)
+    with open(os.path.join(root, LOCK), "w", encoding="utf-8") as lock:
         try:
             import fcntl
             fcntl.flock(lock, fcntl.LOCK_EX)
         except ImportError:  # Windows has no fcntl
             import msvcrt
             msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
-        held = []
+        held, made = [], []
         try:
             rc, problems = sync_now(root, force=True)
             held = [{k: e[k] for k in ("doc", "path", "doc_id", "asks")} for e in out.EVENTS if e.get("asks")]
+            made = created_docs()
         except Exception as e:  # any crash still ends in a result, so the marker never stays "running"
             rc, problems = 1, [f"{type(e).__name__}: {e}"]
     write(os.path.join(root, LAST), json.dumps({"rc": rc, "problems": problems, "started": marker.get("started", 0),
-                                                **({"held": held} if held else {})}, ensure_ascii=False))
+                                                **({"held": held} if held else {}),
+                                                **({"created": made} if made else {})}, ensure_ascii=False))
 
 def hook(args):
     """Claude Code hooks: SessionStart, Stop (send the local edits when Claude finishes a turn) and the guard on the

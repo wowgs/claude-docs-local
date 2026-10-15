@@ -53,16 +53,24 @@ class DocsyncJson(Sandbox):
         self.write("proj/docsync.json", '{"name": "Nice", "docs": {}}')
         self.assertEqual(p.project_name(self.path("proj")), "Nice")
 
-    def test_entry_forms(self):
-        self.assertEqual(p.entry("id1"), ("id1", None))
-        self.assertEqual(p.entry(None), (None, None))
-        self.assertEqual(p.entry({"id": None, "name": "N"}), (None, "N"))
 
-    def test_set_cfg_id_keeps_the_name(self):
-        f = self.write("docsync.json", '{"docs": {"d": {"id": null, "name": "N"}, "e": null}}')
-        p.set_cfg_id(f, "d", "x")
-        p.set_cfg_id(f, "e", "y")
-        self.assertEqual(textio.load_json(f)["docs"], {"d": {"id": "x", "name": "N"}, "e": "y"})
+
+class Modes(Sandbox):
+    def test_a_project_has_its_own_mode_or_the_default(self):
+        os.makedirs(self.path("a"))
+        p.register(self.path("a"))
+        p.save_user({**p.load_user(), "sync": "user"})
+        self.assertEqual(p.mode_of(self.path("a")), "user")
+        p.set_mode(self.path("a"), "auto-force")
+        self.assertEqual(p.mode_of(self.path("a")), "auto-force")
+        p.set_mode(self.path("a"), None)
+        self.assertEqual(p.mode_of(self.path("a")), "user")
+
+    def test_a_2x_config_is_moved_to_schema_2(self):
+        os.makedirs(os.path.dirname(p.user_config()))
+        textio.write(p.user_config(), json.dumps({"sync": "auto", "projects": ["/x", "/y"]}))
+        self.assertEqual(p.load_user(), {"sync": "auto", "projects": {"/x": {}, "/y": {}}, "schema": 2})
+        self.assertEqual(textio.load_json(p.user_config())["projects"], {"/x": {}, "/y": {}})
 
 
 if __name__ == "__main__":
