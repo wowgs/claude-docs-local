@@ -10,6 +10,7 @@ One section per version, newest first. A change to the structure of the user con
 - Checked on 2026-10-15.
   - Desktop session (Claude Code 2.1.295) in this project with 2.6.6 loaded: the Docs `create` with object `node` was refused, and a comment reached the server. `batch`, `update` and `delete` reached the server. docsync's `create` through the bridge was refused by the hook.
   - `claude -p` (Claude Code 2.1.300) in this project with stub MCP servers. With a stub named by a UUID and 2.6.7: Claude's `update`, `batch`, `delete` and `create` of `node` were refused. A comment, the tools of another stub server, and docsync's `update` and `create` through the bridge ran. With 2.6.6, Claude's `update`, `batch` and `delete` ran, and docsync's `create` through the bridge was refused. With the stub named `claude_ai_Claude_Docs` and 2.6.7: `create` of `node` was refused, and a comment ran.
+  - Desktop session (Claude Code 2.1.295) in this project after the update to 2.6.7, against a doc id that does not exist: Claude's `update`, `batch`, `delete` and `create` of `node` were refused by the module, and a comment reached the server. docsync's `create`, `update` and `batch` through the bridge reached the server.
   - Also seen in that run: a module's `tool.call` hook did not fire for the module's own `$.mcp.call`, and a PreToolUse hook did. With the project's deny rules, `$.tool.list` does not list `batch` and `update`. So in a terminal session in a project the bridge finds no Claude Docs server, and docsync uses its own login.
 
 ## 2.6.6 — 2026-10-15
