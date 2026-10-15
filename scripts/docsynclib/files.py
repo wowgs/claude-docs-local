@@ -2,7 +2,7 @@
 import datetime, json, os, re, sys
 
 from . import output as out
-from docmodel.markdown import sha
+from docmodel.compare import sha
 from .textio import load_json, read, write
 
 TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",

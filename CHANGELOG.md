@@ -2,6 +2,18 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.2 — 2026-10-15
+
+- One tab that docsync cannot handle no longer stops the sync of the whole project. The sync names that tab ("not synced: …"), leaves it as it is, and goes on with the other tabs and docs.
+- A pull no longer stops on these elements of the doc, which markdown has no syntax for:
+  - Underlined and highlighted text: the local file has the text without the mark.
+  - A table without a header row: the local file shows its first row as the header.
+  - A placeholder block: the local file has it as a chip.
+
+  The doc keeps the mark and the table as they are. A push changes only the blocks that were edited locally, so they change only when that paragraph or table is edited. Checked on a test doc: a push of another line kept the underline, the highlight, the placeholder and the table without a header row.
+- A table cell with `<br>` inside `code` is no longer refused as a cell with several paragraphs.
+- Code: `docmodel` raises its own errors instead of ending the program, and is split into `tree`, `markdown`, `compare`, `blocks`, `edits` and `write`. `docsynclib` is split into `sync`, `pull`, `push`, `widgets`, `hooks` and `cli`. All calls to the doc go through `docsynclib.mcp`.
+
 ## 2.6.1 — 2026-10-15
 
 - A push of a tab with bold, italic or a link around `code` no longer ends in "written, but the doc DIFFERS". The doc keeps such text as several pieces that each carry the mark. docsync wrote a pair of `**` around each piece, so the text it read back never matched the local file. Now one mark goes around all the pieces that carry it. All 22 synced tabs of three projects read back the same as their files.

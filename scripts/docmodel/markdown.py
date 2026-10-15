@@ -1,12 +1,12 @@
-"""The doc's XML as markdown plus chips, and the markdown cut into parts that fit one write."""
-import hashlib, json, re, sys
+"""The doc's XML as markdown plus chips: what a tab's local file holds."""
+import re
 
+from .errors import Unsupported
 from .tree import elements, parse, strings
 
 ESC = re.compile(r"([\\`*_\[\]<>#|])")
 CHIP = re.compile(r"<\?claude block (\w+)\?>")
 CELL_BREAK = "<br>"  # several paragraphs (or a line break) in one table cell: no markdown the server reads back
-CAP = 30000  # server cap is 32768 bytes of inline content per write
 
 
 def esc(s, in_table):
@@ -35,8 +35,8 @@ class Md:
                 out += self.runs(c, marks + (c["tag"],))
             elif c["tag"] == "link":
                 out += self.runs(c, marks + (("link", c["attrs"]["href"]),))
-            else:
-                raise SystemExit(f"unknown inline mark <{c['tag']}>")
+            else:  # a mark markdown has no syntax for (underline, highlight): its text without it; the doc keeps
+                out += self.runs(c, marks)  # the mark until this paragraph is edited locally
         return out
 
     def inline(self, el, in_table=False):
@@ -67,7 +67,7 @@ class Md:
             elif c["tag"] == "comment":  # where a comment thread starts: the server paints it on a read, no text
                 continue
             else:
-                raise SystemExit(f"unknown inline <{c['tag']}>")
+                raise Unsupported(f"the doc has <{c['tag']}> in a paragraph, which docsync cannot write as markdown yet")
         merged = []
         for t, m in runs:
             if merged and t is not None and merged[-1][0] is not None and merged[-1][1] == m:
@@ -119,10 +119,9 @@ class Md:
                 lines += self.item(item, bullet(kind, n, item), indent)
             return lines
         if tag == "table":
+            # A table without a header row: its first row is written as the header, the only table markdown has;
+            # the doc keeps the table as it is until it is edited locally.
             rows = [self.cells(row) for row in elements(el)]
-            header = all(c["attrs"].get("header") == "true" for c in elements(elements(el)[0]))
-            if not header:
-                raise SystemExit("table without a header row is not supported")
             lines = [row_line(rows[0]), row_line(["---"] * len(rows[0]))] + [row_line(r) for r in rows[1:]]
             return [indent + l for l in lines]
         if tag == "blockquote":
@@ -140,7 +139,9 @@ class Md:
             return [indent + l for l in [fence + el["attrs"].get("language", "")] + code.split("\n") + [fence]]
         if tag == "horizontalRule":
             return [indent + "---"]
-        raise SystemExit(f"unknown block <{tag}>")
+        if tag == "pending":  # a placeholder block: a chip, as the doc's own markdown writes one
+            return [indent + self.chip({"type": "pending", "intent": el["attrs"].get("intent", "")})]
+        raise Unsupported(f"the doc has a <{tag}> block, which docsync cannot write as markdown yet")
 
     def item(self, item, mark, indent=""):
         """A list item's lines: its first paragraph after the bullet, then its other blocks indented."""
@@ -189,14 +190,6 @@ def row_line(cells):
     return "| " + " | ".join(cells) + " |"
 
 
-def check_pushable(md, where):
-    """Refuse markdown the server would not read back as written: a table cell with several paragraphs."""
-    for n, line in enumerate(md.split("\n"), 1):
-        if line.lstrip().startswith("|") and re.search(r"(?<!\\)" + re.escape(CELL_BREAK), line):
-            sys.exit(f"{where}, line {n}: a table cell with several paragraphs ({CELL_BREAK}) cannot be written back; "
-                     "make it one paragraph, or edit that cell in the doc")
-
-
 def blocks_of(el):
     """The blocks inside el (the doc, a list item, a quote), without comment marks."""
     return [c for c in elements(el) if c["tag"] != "comment"]
@@ -207,133 +200,3 @@ def to_markdown(xml):
     md = Md()
     parts = ["\n".join(md.block(b)) for b in blocks_of(doc)]
     return "\n\n".join(parts) + "\n", md.blocks, doc
-
-
-def render(md, blocks):
-    """Replace chip placeholders by a stable text form, for comparing two versions."""
-    def spec(k):
-        v = dict(blocks.get(k) or {})
-        if v.get("type") == "mention":
-            v.pop("label", None)  # the server fills labels in itself
-        return json.dumps(v, ensure_ascii=False, sort_keys=True)
-    return CHIP.sub(lambda m: spec(m.group(1)), md)
-
-
-BLOCK_START = re.compile(r"\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||```|---\s*$|<\?claude block)")
-
-
-def unwrap(lines):
-    """Join soft line breaks: a line that continues a paragraph is one paragraph with it, as the doc stores it.
-    Not joined: blank lines, fenced code, a line that starts a block, a line after a hard break (\\ or two spaces),
-    after a heading, a table row, a fence, a rule or a chip line."""
-    out, fence = [], False
-    for l in lines:
-        s = l.strip()
-        if s.startswith("```"):
-            fence = not fence
-            out.append(l)
-            continue
-        prev = out[-1] if out else ""
-        ps = prev.strip()
-        if (not fence and s and ps and not BLOCK_START.match(l) and not prev.endswith(("\\", "  "))
-                and not re.match(r"(#{1,6}\s|\||```|---\s*$|<\?claude block)", ps)):
-            out[-1] = prev.rstrip() + " " + s
-        else:
-            out.append(l)
-    return out
-
-
-def norm(s):
-    """Lines to compare: trailing spaces and repeated blank lines do not change the markdown."""
-    out = []
-    for l in s.strip().splitlines():
-        l = l.rstrip()
-        if l or (out and out[-1]):
-            out.append(l)
-    return out
-
-
-INWORD_UNDERSCORE = re.compile(r"(?<=\w)\\_(?=\w)")
-
-
-def plain_underscores(line):
-    """Outside code spans, `\\_` between word characters is the same text as `_`: such an underscore never starts
-    emphasis, so the doc reads both the same and writes it back escaped."""
-    parts = line.split("`")
-    return "`".join(INWORD_UNDERSCORE.sub("_", p) if i % 2 == 0 else p for i, p in enumerate(parts))
-
-
-def compare_lines(md, blocks):
-    """The lines that two versions of a tab are compared by: soft line breaks joined, in-word underscores unescaped,
-    chips rendered, then norm. Fenced code is compared as written."""
-    out, fence = [], False
-    for l in unwrap(md.split("\n")):
-        if l.strip().startswith("```"):
-            fence = not fence
-        out.append(l if fence or l.strip().startswith("```") else plain_underscores(l))
-    return norm(render("\n".join(out), blocks))
-
-
-def same(md_a, blocks_a, md_b, blocks_b):
-    return compare_lines(md_a, blocks_a) == compare_lines(md_b, blocks_b)
-
-
-def sha(*parts):
-    h = hashlib.sha256()
-    for p in parts:
-        h.update(p.encode())
-    return h.hexdigest()
-
-
-def doc_hash(xml):
-    """Hash of the doc's text, blind to formatting the markdown does not carry (e.g. column widths)."""
-    md, blocks, _ = to_markdown(xml)
-    return sha("\n".join(norm(render(md, blocks))))
-
-
-def h1(md):
-    m = re.search(r"^# (.+)$", md or "", re.M)
-    return m.group(1).strip() if m else None
-
-
-def md_source(part, blocks):
-    used = {k: blocks[k] for k in CHIP.findall(part)}
-    return {"as": "markdown", "from": {"kind": "inline", "content": part}, **({"blocks": used} if used else {})}
-
-
-def chunks(md):
-    """Split markdown between top-level blocks into parts under CAP bytes: [(text, cont)].
-    A table larger than CAP is split by rows; cont=True marks rows to append to the table before it."""
-    blocks = re.split(r"\n\n(?=\S)", md.strip("\n"))
-    parts, cur = [], ""
-
-    def add(b):
-        nonlocal cur
-        cand = cur + ("\n\n" if cur else "") + b
-        if len(cand.encode()) > CAP:
-            parts.append((cur, False))
-            cand = b
-        cur = cand
-
-    for b in blocks:
-        if len(b.encode()) <= CAP:
-            add(b)
-            continue
-        lines = b.split("\n")
-        if not (lines[0].startswith("|") and len(lines) > 3):
-            sys.exit("a single non-table block is larger than the write cap; split it")
-        head, rows, groups, g = lines[:2], lines[2:], [], []
-        for r in rows:
-            if len("\n".join(head + g + [r]).encode()) > CAP and g:
-                groups.append(g)
-                g = []
-            g.append(r)
-        groups.append(g)
-        add("\n".join(head + groups[0]))
-        parts.append((cur, False))
-        cur = ""
-        for g in groups[1:]:
-            parts.append(("\n".join(head + g), True))
-    if cur:
-        parts.append((cur, False))
-    return [(p + "\n", c) for p, c in parts]

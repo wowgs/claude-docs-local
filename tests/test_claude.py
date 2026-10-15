@@ -89,14 +89,14 @@ if __name__ == "__main__":
 
 class SessionStart(Sandbox):
     def test_writes_a_projects_settings_only_when_they_are_wrong(self):
-        from docsynclib import cli
+        from docsynclib import hooks
         root = self.path("proj")
         os.makedirs(root)
         c.turn_on(root)
         f = c.project_settings(root)
         os.remove(f)
-        cli.session_start({"hook_event_name": "SessionStart", "cwd": root})
+        hooks.session_start({"hook_event_name": "SessionStart", "cwd": root})
         self.assertTrue(textio.load_json(f)["enabledPlugins"][c.FILES])
         os.utime(f, (1, 1))
-        cli.session_start({"hook_event_name": "SessionStart", "cwd": root})
+        hooks.session_start({"hook_event_name": "SessionStart", "cwd": root})
         self.assertEqual(os.path.getmtime(f), 1)  # already right: not written again

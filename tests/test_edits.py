@@ -1,7 +1,7 @@
 import unittest
 
 import support  # noqa: F401
-from docmodel import edits, markdown as m
+from docmodel import blocks, edits, markdown as m, write
 from test_markdown import DOC, MORE
 
 TAB = (
@@ -103,9 +103,9 @@ class Plan(unittest.TestCase):
     def test_an_inserted_run_larger_than_one_write_is_cut(self):
         big = "\n\n".join("p%d " % n + "x" * 1000 for n in range(40))
         ops = plan(MD + "\n" + big + "\n")
-        self.assertLess(len(ops[0]["source"]["from"]["content"].encode()), m.CAP)
-        with self.assertRaises(edits.Unsupported):
-            plan(MD + "\n" + "y" * (m.CAP + 10) + "\n")
+        self.assertLess(len(ops[0]["source"]["from"]["content"].encode()), write.CAP)
+        with self.assertRaises(edits.NoPlan):
+            plan(MD + "\n" + "y" * (write.CAP + 10) + "\n")
 
     def test_batch_takes_the_ops_that_fit_one_write(self):
         ops = [{"op": "insert", "source": {"from": {"content": "x" * 20000}}}] * 3
@@ -117,16 +117,16 @@ class Split(unittest.TestCase):
     def test_blocks_are_split_as_the_doc_markdown_joins_them(self):
         for xml in (DOC, MORE, TAB):
             md, _, doc = m.to_markdown(xml)
-            self.assertEqual(len(edits.split_blocks(md)), len(m.blocks_of(doc)))
+            self.assertEqual(len(blocks.split_blocks(md)), len(m.blocks_of(doc)))
 
     def test_fenced_code_keeps_its_blank_lines_and_a_heading_or_list_starts_a_block(self):
         md = "```\na\n\nb\n```\n\n# H\ntext\nmore\n- item\n\n| a |\n| - |\nafter"
-        self.assertEqual(edits.split_blocks(md), ["```\na\n\nb\n```", "# H", "text\nmore", "- item", "| a |\n| - |",
+        self.assertEqual(blocks.split_blocks(md), ["```\na\n\nb\n```", "# H", "text\nmore", "- item", "| a |\n| - |",
                                                   "after"])
 
     def test_table_rows_split_on_unescaped_pipes(self):
-        self.assertEqual(edits.rows_of("| a\\|b | c |\n| --- | --- |\n| d | e |"), [["a\\|b", "c"], ["d", "e"]])
-        self.assertIsNone(edits.rows_of("| a |\nno separator"))
+        self.assertEqual(blocks.rows_of("| a\\|b | c |\n| --- | --- |\n| d | e |"), [["a\\|b", "c"], ["d", "e"]])
+        self.assertIsNone(blocks.rows_of("| a |\nno separator"))
 
 
 if __name__ == "__main__":
