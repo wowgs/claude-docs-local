@@ -2,6 +2,16 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.7 — 2026-10-15
+
+- In a docs-local project in the desktop app, Claude can no longer change a doc through the Docs tools `batch`, `update` and `delete`. The project's deny rules name these tools as the terminal names them (`mcp__claude_ai_Claude_Docs__…`). The desktop app names the Claude Docs server by a UUID, so the rules did not apply there.
+- docsync's own calls through the bridge are no longer refused. In 2.6.6, the PreToolUse hook also saw the calls that the hooks module makes with `$.mcp.call`. So in the desktop app it refused docsync's `create` of a widget (object `node`).
+- The guard now sits in the hooks module (`hooks/bridge.ts`), in its `tool.call` hook. That hook sees Claude's tool calls but not the module's own `$.mcp.call`. For a tool named `mcp__*__create`, `batch`, `update` or `delete`, the module runs `docsync hook` with the call and the Claude Docs server it found (`DOCSYNC_DOCS_SERVER`). In a project, docsync refuses `batch`, `update` and `delete` of that server, and `create` of anything but a comment. The tools of other servers pass. The plugin has no PreToolUse hook any more. The deny rules stay: in the terminal they keep these tools out of Claude's context.
+- Checked on 2026-10-15.
+  - Desktop session (Claude Code 2.1.295) in this project with 2.6.6 loaded: the Docs `create` with object `node` was refused, and a comment reached the server. `batch`, `update` and `delete` reached the server. docsync's `create` through the bridge was refused by the hook.
+  - `claude -p` (Claude Code 2.1.300) in this project with stub MCP servers. With a stub named by a UUID and 2.6.7: Claude's `update`, `batch`, `delete` and `create` of `node` were refused. A comment, the tools of another stub server, and docsync's `update` and `create` through the bridge ran. With 2.6.6, Claude's `update`, `batch` and `delete` ran, and docsync's `create` through the bridge was refused. With the stub named `claude_ai_Claude_Docs` and 2.6.7: `create` of `node` was refused, and a comment ran.
+  - Also seen in that run: a module's `tool.call` hook did not fire for the module's own `$.mcp.call`, and a PreToolUse hook did. With the project's deny rules, `$.tool.list` does not list `batch` and `update`. So in a terminal session in a project the bridge finds no Claude Docs server, and docsync uses its own login.
+
 ## 2.6.6 — 2026-10-15
 
 - In a docs-local project in the desktop app, the Docs `create` tool now makes only comments. The hook that allows only comments did not run there. Its matcher named the tool as the terminal names it (`mcp__claude_ai_Claude_Docs__create`). The desktop app names the Claude Docs server by a UUID, so the tool is `mcp__<uuid>__create`. Claude Code compares a matcher of only letters, digits and `_` as an exact string.

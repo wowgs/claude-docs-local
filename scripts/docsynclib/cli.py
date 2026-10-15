@@ -324,7 +324,7 @@ def parser():
     a.add_argument("action", nargs="?", choices=["scan"], help="scan: list the folders to ask about (JSON)")
     a.add_argument("--mode", choices=sorted(MODES), help="who syncs (the saved choice when left out)")
     a.add_argument("--project", action="append", default=[], metavar="FOLDER", help="turn local docs on here; repeatable")
-    sub.add_parser("hook", help="for Claude Code: the hooks on the Docs create tool and on Stop")
+    sub.add_parser("hook", help="for Claude Code: the hooks on the Docs tools that write and on Stop")
     sub.add_parser("hook-wake", help="for Claude Code: the Stop hook of mode auto-force, run in the background")
     sub.add_parser("push-background", help="for the auto-force hook: push --force, result in .docsync-last.json")
     sub.add_parser("bridge", help="for the plugin's hooks module: the broker to the session's Claude Docs connector")

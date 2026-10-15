@@ -106,6 +106,21 @@ class Hook(Sandbox):
             for tool in ("mcp__0e55ddc7-28be-4db1-9222-59552e7807cb__create", "mcp__claude_ai_Notes__create", None):
                 self.assertIsNone(c.decide(self.call("node", tool)))
 
+    def test_batch_update_and_delete_of_the_docs_server_are_denied_in_a_project_under_either_name(self):
+        with mock.patch.dict(os.environ, {"DOCSYNC_DOCS_SERVER": self.DESKTOP}):
+            for server in ("claude_ai_Claude_Docs", self.DESKTOP):
+                for t in ("batch", "update", "delete"):
+                    for obj in ("node", "utterance"):  # even a comment: only `create` may write one
+                        out = c.decide(self.call(obj, f"mcp__{server}__{t}"))
+                        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny", (server, t, obj))
+            for tool in ("query", "read", "guide", "export"):  # the Docs tools that read pass
+                self.assertIsNone(c.decide(self.call(None, f"mcp__{self.DESKTOP}__{tool}")))
+            for tool in ("mcp__other__update", "mcp__other__delete", "mcp__other__batch"):
+                self.assertIsNone(c.decide(self.call("node", tool)))
+            os.makedirs(self.path("other"))
+            outside = {"cwd": self.path("other"), "tool_name": f"mcp__{self.DESKTOP}__update", "tool_input": {}}
+            self.assertIsNone(c.decide(outside))
+
 
 if __name__ == "__main__":
     unittest.main()

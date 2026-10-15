@@ -1,7 +1,9 @@
 """Claude Code settings. Two plugins from the `wowgs` marketplace: docs-local (the /docs-local command, docsync,
 the hook) is on everywhere; docs-local-files (the skill that says the docs are local) is off in user settings and
 on in each project's .claude/settings.local.json, where the Docs tools that write are also off, except comments:
-`create` stays, and the hook lets it make only comments (object "utterance")."""
+`create` stays, and the guard lets it make only comments (object "utterance"). The deny rules name the terminal's
+server (claude_ai_Claude_Docs); the guard (`decide`, run by the hooks module) also refuses the tools that write under
+the desktop app's server name."""
 import json, os
 
 from .projects import project_of, register, unregister
@@ -13,6 +15,7 @@ PLUGIN = "docs-local@" + MARKET
 FILES = "docs-local-files@" + MARKET
 DOCS_TOOL = "mcp__claude_ai_Claude_Docs__"
 DENY = [DOCS_TOOL + t for t in ("batch", "update", "delete")]
+WRITES = ("create", "batch", "update", "delete")  # the Docs tools the guard covers (WRITES in hooks/bridge.ts)
 
 
 def edit_json(path, change):
@@ -92,23 +95,28 @@ def deny(reason):
                                    "permissionDecisionReason": "docs-local: " + reason}}
 
 
-def docs_create(tool_name):
-    """Whether a tool is the Docs `create` tool. Its server is claude_ai_Claude_Docs in the terminal and a UUID in
-    the desktop app; the hooks module (hooks/bridge.ts) sets DOCSYNC_DOCS_SERVER to the name it found."""
+def docs_tool(tool_name):
+    """The Docs tool's own name (`create`) when `tool_name` is a tool of the Claude Docs server, else None. The
+    server is claude_ai_Claude_Docs in the terminal and a UUID in the desktop app; the hooks module
+    (hooks/bridge.ts) passes the name it found as DOCSYNC_DOCS_SERVER."""
     server = os.environ.get("DOCSYNC_DOCS_SERVER")
-    return tool_name == DOCS_TOOL + "create" or bool(server) and tool_name == f"mcp__{server}__create"
+    for prefix in (DOCS_TOOL, f"mcp__{server}__" if server else None):
+        if prefix and (tool_name or "").startswith(prefix):
+            return tool_name[len(prefix):]
+    return None
 
 
 def decide(call_input):
-    """The hook's answer for one `mcp__*__create` call: None lets it through, else a deny.
-    Other servers' create tools pass; the Docs one passes outside projects, and in a project only for comments
-    (object "utterance")."""
-    if not docs_create(call_input.get("tool_name")):
+    """The guard's answer for one call of a tool named `mcp__*__create|batch|update|delete`: None lets it through,
+    else a deny. Other servers' tools pass. The Docs ones pass outside projects; in a project only `create` of a
+    comment (object "utterance") passes."""
+    tool = docs_tool(call_input.get("tool_name"))
+    if tool not in WRITES:
         return None
     cwd = call_input.get("cwd")
     if cwd and not project_of(cwd):
         return None
-    if call_input.get("tool_input", {}).get("object") == "utterance":
+    if tool == "create" and call_input.get("tool_input", {}).get("object") == "utterance":
         return None
     return deny("this project's docs are local files; edit those instead (Docs tools may only write comments here)")
 

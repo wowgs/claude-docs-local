@@ -1,4 +1,4 @@
-"""Claude Code hooks: SessionStart (a project's settings), PreToolUse on the Docs create tool (only comments), Stop
+"""Claude Code hooks: SessionStart (a project's settings), the guard on the Docs tools that write (only comments), Stop
 (send the local edits when Claude finishes a turn) and the Stop hook that runs in the background in mode auto-force
 and wakes Claude when the push fails (asyncRewake)."""
 import argparse, json, os, subprocess, sys, time
@@ -168,8 +168,9 @@ def push_background(args):
                                                 **({"held": held} if held else {})}, ensure_ascii=False))
 
 def hook(args):
-    """Claude Code hooks: PreToolUse on the `create` tools (Docs `create` only for comments; tabs and contents are
-    local files) and Stop (send the local edits when Claude finishes a turn)."""
+    """Claude Code hooks: SessionStart, Stop (send the local edits when Claude finishes a turn) and the guard on the
+    Docs tools that write (only comments; tabs and contents are local files). The hooks module (hooks/bridge.ts)
+    runs the guard with a PreToolUse input but no `cwd`: it runs in the session's folder."""
     try:
         event = json.load(sys.stdin)
     except ValueError:
@@ -179,6 +180,6 @@ def hook(args):
     elif event.get("hook_event_name") == "Stop":
         answer = stop_hook(event)
     else:
-        answer = decide(event)
+        answer = decide({"cwd": os.getcwd(), **event})
     if answer:
         print(json.dumps(answer, ensure_ascii=False))

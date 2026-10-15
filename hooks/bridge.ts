@@ -6,12 +6,16 @@ import type { EngineInterface, Register } from 'claude-code'
 // pulls the broker's requests and calls each tool with the session's own connection ($.mcp.call). Without the
 // docsync command, or when the broker stops, docsync uses Claude Code's stored login as before.
 //
-// The server name of the Claude Docs connector differs between the terminal (claude_ai_Claude_Docs) and the
-// desktop app (a UUID). Before each `mcp__*__create` call, this module sets DOCSYNC_DOCS_SERVER to the name it
-// finds, so the PreToolUse hook (`docsync hook`, matcher `^mcp__.+__create$`) knows which create tool to guard.
+// The guard on the Docs tools that write: in a docs-local project Claude may only write comments through them
+// (`docsync hook` decides, scripts/docsynclib/claude.py). It sits here, in `tool.call`, and not in a PreToolUse
+// hook: `tool.call` sees Claude's calls but not this module's own $.mcp.call, while a PreToolUse hook sees both and
+// would refuse docsync's writes through the bridge. The Claude Docs server is claude_ai_Claude_Docs in the terminal
+// and a UUID in the desktop app; the guard passes the name it finds on as DOCSYNC_DOCS_SERVER.
 
 const PUMPS = 8 // requests served at once: docsync sends up to 8
 const DOCS_TOOLS = ['batch', 'guide', 'update'] // the tools the Claude Docs connector always lists
+const WRITES = /^mcp__.+__(create|batch|update|delete)$/ // the tool names the guard asks docsync about
+const RESERVED = new Set(['tool', 'tool_use_id', 'consent', 'agentId', 'requestMeta']) // tool.call's own keys
 
 let server: string | undefined // the Claude Docs server's name in this session, once found
 
@@ -30,14 +34,35 @@ const findServer = async ($: EngineInterface): Promise<string | undefined> => {
   return server
 }
 
+// `docsync hook` on one call, as a PreToolUse hook would get it: the reason of its deny, or undefined
+const guard = async ($: EngineInterface, call: Record<string, unknown>): Promise<string | undefined> => {
+  const docs = await findServer($)
+  const toolInput = Object.fromEntries(Object.entries(call).filter(([k]) => !RESERVED.has(k)))
+  const stdin = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: call.tool, tool_input: toolInput })
+  for (const python of ['python3', 'python']) {
+    let ran
+    try {
+      ran = await $.process.run([python, `${$.plugin.root}/scripts/docsync.py`, 'hook'], {
+        stdin,
+        env: docs ? { DOCSYNC_DOCS_SERVER: docs } : {},
+      })
+    } catch {
+      continue // this interpreter did not start: try the next one
+    }
+    if (ran.exitCode !== 0) throw new Error(`docsync hook exited with ${ran.exitCode}: ${ran.stderr.slice(0, 300)}`)
+    if (!ran.stdout.trim()) return undefined
+    const answer = JSON.parse(ran.stdout) as { hookSpecificOutput?: { permissionDecisionReason?: string } }
+    return answer.hookSpecificOutput?.permissionDecisionReason ?? 'docs-local: refused'
+  }
+  throw new Error('no python3 or python to run docsync hook')
+}
+
 export const register: Register = on => {
   on('tool.call', async ($, e, next) => {
-    if (/^mcp__.+__create$/.test(e.tool)) {
-      const docs = await findServer($)
-      if (docs) await $.env.set('DOCSYNC_DOCS_SERVER', docs)
-    }
-    return next(e)
-  }).catch(($, e, next) => next(e)) // the hook's own check still guards the terminal's name
+    if (!WRITES.test(e.tool)) return next(e)
+    const reason = await guard($, e)
+    return reason ? { deny: reason } : next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'docs-local: the guard on the Docs tools failed' }))
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)

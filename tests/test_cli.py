@@ -1,5 +1,6 @@
 """The docsync command end to end, on a copy of the plugin in a sandbox."""
 import json, os, shutil, subprocess, sys, unittest
+from unittest import mock
 
 from support import SCRIPTS, Sandbox
 from docsynclib import textio
@@ -70,6 +71,18 @@ class Cli(Sandbox):
         other = {"cwd": proj, "tool_name": "mcp__other__create", "tool_input": {"object": "file"}}
         self.assertEqual(self.run_ok("hook", stdin=json.dumps(other)), "")
         self.assertEqual(self.run_ok("hook", stdin="not json"), "")
+
+    def test_the_guard_from_the_hooks_module_takes_the_folder_it_runs_in(self):
+        proj, other = self.path("proj"), self.path("other")
+        os.makedirs(other)
+        self.run_ok("project", "use", cwd=proj)
+        call = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "mcp__1a59c906__update",
+                           "tool_input": {"object": "node"}})  # no cwd: hooks/bridge.ts runs it in the session's folder
+        env = {"DOCSYNC_DOCS_SERVER": "1a59c906"}
+        with mock.patch.dict(os.environ, env):
+            no = json.loads(self.run_ok("hook", stdin=call, cwd=proj))
+            self.assertEqual(no["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertEqual(self.run_ok("hook", stdin=call, cwd=other), "")
 
     def installed(self, *ids):
         self.write("claude/plugins/installed_plugins.json", json.dumps({"version": 2, "plugins": {
