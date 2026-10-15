@@ -28,7 +28,7 @@ Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/mar
 
 `/docs-local` turns a project on, `/docs-local remove` turns it off, `/docs-local mode <mode>` gives it its own mode, `/docs-local import` makes docs of its markdown files.
 
-Needs: claude.ai login in Claude Code, Claude Docs connector, git, Python 3.9+. In a project that several people sync, everyone needs the same major version: 3.x does not share a project with 2.x.
+Needs: claude.ai login in Claude Code, Claude Docs connector, git, Python 3.9+.
 
 Tested on macOS and Linux. Windows: best effort :)
 
