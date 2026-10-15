@@ -2,7 +2,7 @@
 mention labels do not count."""
 import hashlib, json, re
 
-from .markdown import sub_chips, to_markdown
+from .markdown import in_fence, sub_chips, to_markdown
 
 
 def render(md, blocks):
@@ -22,20 +22,17 @@ def unwrap(lines):
     """Join soft line breaks: a line that continues a paragraph is one paragraph with it, as the doc stores it.
     Not joined: blank lines, fenced code, a line that starts a block, a line after a hard break (\\ or two spaces),
     after a heading, a table row, a fence, a rule or a chip line."""
-    out, fence = [], False
-    for l in lines:
-        s = l.strip()
-        if s.startswith("```"):
-            fence = not fence
-            out.append(l)
-            continue
+    out, prev_code = [], False
+    for l, code in zip(lines, in_fence(lines)):
         prev = out[-1] if out else ""
         ps = prev.strip()
-        if (not fence and s and ps and not BLOCK_START.match(l) and not prev.endswith(("\\", "  "))
-                and not re.match(r"(#{1,6}\s|\||```|---\s*$|<\?claude block|<!-- docsync )", ps)):
-            out[-1] = prev.rstrip() + " " + s
+        if (not code and not prev_code and l.strip() and ps and not BLOCK_START.match(l)
+                and not prev.endswith(("\\", "  "))
+                and not re.match(r"(#{1,6}\s|\||---\s*$|<\?claude block|<!-- docsync )", ps)):
+            out[-1] = prev.rstrip() + " " + l.strip()
         else:
             out.append(l)
+        prev_code = code
     return out
 
 
@@ -62,11 +59,8 @@ def plain_underscores(line):
 def compare_lines(md, blocks):
     """The lines that two versions of a tab are compared by: soft line breaks joined, in-word underscores unescaped,
     chips rendered, then norm. Fenced code is compared as written."""
-    out, fence = [], False
-    for l in unwrap(md.split("\n")):
-        if l.strip().startswith("```"):
-            fence = not fence
-        out.append(l if fence or l.strip().startswith("```") else plain_underscores(l))
+    lines = unwrap(md.split("\n"))
+    out = [l if code else plain_underscores(l) for l, code in zip(lines, in_fence(lines))]
     return norm(render("\n".join(out), blocks))
 
 

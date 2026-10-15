@@ -2,32 +2,39 @@
 left as it is; the others go on. The tab files are where the manifest says (manifest.py); docsync renames and deletes
 only the ones in their doc's folder. --force: the local files win (sync, push); pull --force: the doc wins, and the
 local edits it writes over go to the trash first."""
-import os
+import json, os
 from concurrent.futures import ThreadPoolExecutor
 
 from . import mcp, output as out
-from .files import (FMT, TRASH, base_for, load_base, local_changed, local_hash, move_tab_files, own_files, posix,
-                    save_base, svc_dir, tab_files, to_trash, words)
-from .manifest import mapped
+from .errors import brief, LocalError, Refused
+from .files import (base_for, blocks_path, FMT, keep_copy, load_base, local_changed, local_hash, locked, move_tab_files,
+                    own_files, posix, read_text, save_base, snapshot, svc_dir, tab_files, theirs_blocks_path,
+                    theirs_path, to_trash, TRASH, words)
+from .manifest import free_path, local_wins, mapped, name_taken
 from .mcp import C
-from .project import Project
+from .project import new_tab_state, Project, RECEIVES, SENDS
 from .pull import pull_tab, refresh, write_blocks
+from .push import create_doc, create_tab, delete_tab, keep_doc_copy, local_md, push_tab
 from .textio import write
-from .push import create_doc, create_tab, delete_tab, local_md, push_tab
 from .widgets import sync_widgets
-from docmodel.compare import doc_hash, h1, same
+from docmodel.compare import doc_hash, h1, same, sha
 from docmodel.errors import DocError
 from docmodel.fileview import to_file
 from docmodel.markdown import to_markdown
 from docmodel.merge import merge
 
 
+GONE = {("deny", "access")}  # how the doc answers a read of a doc that is deleted or not shared (2026-10-15)
+
+
 def remote_tabs(doc_id):
-    """(doc name, [(tab id, tab name, node id, parent tab id or None)] in tab order), or None when the doc is not
-    readable."""
+    """(doc name, [(tab id, tab name, node id, parent tab id or None)] in tab order), or None when the doc is gone:
+    deleted, or no longer shared with this account. Any other refusal is an error for this doc, not a deletion."""
     o = mcp.call("read", {"ref": {"object": "project", "id": doc_id}}, soft=True)
-    if o.get("verdict") != "allow":
+    if (o.get("verdict"), o.get("reason")) in GONE:
         return None
+    if o.get("verdict") != "allow":
+        raise Refused(f"the doc could not be read: {brief(o)}")
     v = o["value"]
     order = {k: t.get("order", "") for k, t in v["tabs"].items()}
     files = sorted((f for f in o.get("files", v.get("files", [])) if f["id"] in order),
@@ -123,7 +130,15 @@ def guarded(label, fn):
 
 
 def cmd_sync(args, mode="sync"):
-    """mode: sync (direction by freshness), pull, push, status. Runs in the project root."""
+    """mode: sync (direction by freshness), pull, push, status. Runs in the project root, holding its lock."""
+    if mode == "status":
+        run(args, mode)
+        return
+    with locked():
+        run(args, mode)
+
+
+def run(args, mode):
     P = Project(args.config)
     for key in list(P.cfg["docs"]):
         doc = P.doc(key)
@@ -134,10 +149,10 @@ def cmd_sync(args, mode="sync"):
         if not doc.get("id"):
             if mode == "status":
                 out.ev("info", P.dir(key), "new doc, will be created")
-            elif mode in ("sync", "push"):
+            elif mode in SENDS:
                 guarded(P.dir(key), lambda: create_doc(P, key))
             continue
-        sync_doc(args, mode, P, key)
+        guarded(P.dir(key), lambda: sync_doc(args, mode, P, key))
     out.doc_end()
 
 
@@ -145,8 +160,11 @@ def sync_doc(args, mode, P, key):
     """One doc of the project: its name, then each tab in the doc, the tabs gone from it, the new local tabs, the
     order and nesting of its tabs."""
     doc = P.doc(key)
+    same_name = [e["file"] for e in doc["tabs"] if name_taken(P.cfg, key, e["file"])]
+    if same_name:
+        raise LocalError(f"tab files with the same name share their own files in .docsync/{key}/: "
+                         + ", ".join(same_name) + "; rename one of them")
     doc_id = doc["id"]
-    P.dst(key)["id"] = doc_id
     got, full, revs, fetched = prefetch(P, key, doc_id)
     if got is None:
         doc_gone(mode, P, key)
@@ -157,9 +175,8 @@ def sync_doc(args, mode, P, key):
     if want_name and want_name != doc_name:
         if mode == "status":
             out.ev("info", P.dir(key), f"doc name will change (from {P.config})")
-        elif mode in ("sync", "push"):
-            mcp.call("update", {"ref": {"object": "project", "id": doc_id}, "payload": {"kind": "patch", "patch": [
-                {"op": "set", "path": ["name"], "value": want_name}]}})
+        elif mode in SENDS:
+            mcp.patch_doc(doc_id, {"op": "set", "path": ["name"], "value": want_name})
             out.ev("renamed", P.dir(key), f"doc renamed (name from {P.config})")
     if mode != "status":
         adopt_renamed(P, key)
@@ -169,7 +186,7 @@ def sync_doc(args, mode, P, key):
         if e is None:
             if mode == "status":
                 out.ev("info", new_path(P, key, name), "new tab in the doc")
-            elif mode in ("sync", "pull"):
+            elif mode in RECEIVES:
                 e = {"id": tab_id, "file": new_path(P, key, name), **({"parent": parent} if parent else {})}
                 doc["tabs"].append(e)
                 guarded(e["file"], lambda: pull_tab(P, key, e, tab_id, name, node))
@@ -184,7 +201,7 @@ def sync_doc(args, mode, P, key):
     for e in [e for e in doc["tabs"] if not e.get("id")] + [{"id": None, "file": f} for f in new_files(P, key)]:
         if mode == "status":
             out.ev("info", e["file"], "new local tab")
-        elif mode in ("sync", "push") and os.path.exists(e["file"]):
+        elif mode in SENDS and os.path.exists(e["file"]):
             guarded(e["file"], lambda: create_tab(P, key, e))
     if mode != "status":
         rank = {r[0]: n for n, r in enumerate(remote)}
@@ -197,8 +214,7 @@ def new_path(P, key, name):
     d = P.dir(key)
     b, n = base_for(name), 2
     path = posix(os.path.join(d, b + ".md"))
-    taken = mapped(P.cfg)
-    while os.path.exists(path) or path in taken:
+    while not free_path(P.cfg, key, path):
         path = posix(os.path.join(d, f"{b}-{n}.md"))
         n += 1
     return path
@@ -210,17 +226,16 @@ def nesting(mode, P, key, e, tab_id, parent):
     if t is None or mode == "status":
         return
     if parent != t.get("parent"):
-        if mode in ("sync", "pull"):
+        if mode in RECEIVES:
             if parent:
                 e["parent"] = parent
             else:
                 e.pop("parent", None)
             t["parent"] = parent
-    elif e.get("parent") != t.get("parent") and mode in ("sync", "push"):
+    elif e.get("parent") != t.get("parent") and mode in SENDS:
         op = {"op": "set", "path": ["tabs", tab_id, "subtabOf"], "value": e["parent"]} if e.get("parent") else \
             {"op": "delete", "path": ["tabs", tab_id, "subtabOf"]}
-        mcp.call("update", {"ref": {"object": "project", "id": P.doc(key)["id"]},
-                            "payload": {"kind": "patch", "patch": [op]}})
+        mcp.patch_doc(P.doc(key)["id"], op)
         t["parent"] = e.get("parent")
         out.ev("pushed", e["file"], "tab moved " + (f"under {e['parent']}" if e.get("parent") else "to the top"))
 
@@ -234,7 +249,7 @@ def sync_tab(args, mode, P, key, e, tab_id, name, node, full, revs, fetched):
     if t and not os.path.exists(file):
         if mode == "status":
             out.ev("info", file, "deleted locally")
-        elif mode in ("sync", "push"):
+        elif mode in SENDS:
             data = mcp.read_node(doc_id, node)
             if data["rev"] != t["rev"] and not args.force:
                 out.ev("conflict", file, "deleted locally, changed in the doc · nothing done")
@@ -263,7 +278,7 @@ def sync_tab(args, mode, P, key, e, tab_id, name, node, full, revs, fetched):
     if rem and t.get("dhash") and doc_hash(data["xml"]) == t["dhash"]:
         rem = False  # only formatting changed in the doc (e.g. column widths): not a text change
         t["rev"] = data["rev"]
-    if not loc and not rem and t.get("fmt", 0) < FMT and "xml" in data and mode in ("sync", "pull"):
+    if not loc and not rem and t.get("fmt", 0) < FMT and "xml" in data and mode in RECEIVES:
         back, back_blocks, _ = to_markdown(data["xml"])  # written by an older docsync: pulled again only when the
         if same(back, back_blocks, *local_md(P, key, file)):  # doc has what that one did not write (<u>, attributes);
             t["fmt"] = FMT  # else only shown as this one shows it, so the file keeps its own line breaks
@@ -271,26 +286,71 @@ def sync_tab(args, mode, P, key, e, tab_id, name, node, full, revs, fetched):
             P.save()
             return
         rem = True
-    if mode == "status":
+    action = decide(mode, loc, rem, args.force, wins(args, mode, P),
+                    loc and rem and merged(key, file, t, data), name != t["name"])
+    if action == "status":
         what = ", ".join((["local edits"] if loc else []) + (["doc changed"] if rem else []))
         out.ev("info" if what else "insync", file, what or "in sync")
-    elif loc and rem and not args.force and t.get("conflict_rev") == data["rev"] and mode in ("sync", "push"):
-        push_tab(P, key, e, doc_id, t, data, tab_id)  # merged with the doc's version of the conflict: the doc is unchanged since
-    elif loc and rem and not args.force:
-        t["conflict_rev"] = data["rev"]  # merge with this version of the doc, and the next sync sends the result
-        out.ev("conflict", file, f"changed locally and in the doc (rev {t['rev']} → {data['rev']}) · nothing done")
-    elif mode == "pull" and loc and not args.force:
+    elif action == "conflict":
+        conflict(P, key, e, t, data)
+    elif action == "skip":
         out.ev("skip", file, "local edits not pushed (push, or pull --force to drop them)")
-    elif mode in ("sync", "push") and loc:  # with --force also when the doc changed too: the local file wins
-        if rem and mode == "sync":
+    elif action in ("push", "merge-push"):
+        if action == "merge-push":
             merge_doc(P, key, e, data)
         push_tab(P, key, e, doc_id, t, data, tab_id)
-    elif mode in ("sync", "pull") and (rem or (mode == "pull" and args.force)):
-        pull_tab(P, key, e, tab_id, name, node, data if "xml" in data else None)
-    elif name != t["name"] and mode in ("sync", "pull"):
+    elif action == "pull":
         pull_tab(P, key, e, tab_id, name, node, data if "xml" in data else None)
     else:
         refresh(P, key, e, t)
+
+
+def decide(mode, loc, rem, force, wins, merged, renamed):
+    """What a sync does with a tab that this machine has synced before and the doc still has, from what changed
+    where: "status", "conflict", "skip", "push", "merge-push" (the doc's own changes merged in first), "pull" or
+    "refresh" (nothing changed: only how the file shows it). loc: the file changed since the last sync; rem: the
+    doc did; wins: the file wins over a doc that changed too (--force, or a sync with conflicts "local"); merged: in
+    conflict before, and the file changed since while the doc did not; renamed: the tab's name changed in the doc."""
+    if mode == "status":
+        return "status"
+    if loc and rem and not wins:
+        return "push" if merged and mode in SENDS else "conflict"
+    if mode == "pull" and loc and not force:
+        return "skip"
+    if mode in SENDS and loc:
+        return "merge-push" if rem and mode == "sync" else "push"
+    if mode in RECEIVES and (rem or renamed or (mode == "pull" and force)):
+        return "pull"
+    return "refresh"
+
+
+def wins(args, mode, P):
+    """Does the local file win over a doc that changed too? With --force, and in a sync of a project whose conflicts
+    are "local" (where the doc's own changes are merged in first, merge_doc)."""
+    return args.force or (mode == "sync" and local_wins(P.cfg))
+
+
+def merged(key, file, t, data):
+    """A tab in conflict whose file changed since the conflict was found, while the doc did not: merged."""
+    return t.get("conflict_rev") == data["rev"] and t.get("conflict_hash") not in (None, local_hash(key, file))
+
+
+def conflict(P, key, e, t, data):
+    """A tab changed here and in the doc: nothing is sent or written over. The doc's version goes beside the file
+    (.docsync/<key>/<tab>.from-doc.md), for Claude or the user to merge into the file; the next sync sends the file
+    once it changed and the doc did not."""
+    file = e["file"]
+    new = t.get("conflict_rev") != data["rev"]
+    if new:
+        md, blocks, _ = to_markdown(data["xml"])
+        md, blocks = to_file(md, blocks, P.view(key, file))
+        os.makedirs(os.path.dirname(theirs_path(key, file)), exist_ok=True)
+        write(theirs_path(key, file), md)
+        write(theirs_blocks_path(key, file), json.dumps(blocks, ensure_ascii=False, indent=1) + "\n")
+        t.update(conflict_rev=data["rev"], conflict_hash=local_hash(key, file))
+        P.save()
+    out.ev("conflict", file, f"changed locally and in the doc (rev {t['rev']} → {data['rev']}) · nothing done",
+           merge=True, theirs=theirs_path(key, file), new=new)
 
 
 def merge_doc(P, key, e, data):
@@ -299,17 +359,26 @@ def merge_doc(P, key, e, data):
     (the tab as of the last sync) the file wins whole."""
     file = e["file"]
     b = load_base(key, file)
-    if b is None:
-        return
-    local = local_md(P, key, file)
     back, back_blocks, _ = to_markdown(data["xml"])
+    if b is None:
+        saved = keep_doc_copy(file, data)
+        out.ev("info", file, f"changed here and in the doc, no base to merge with: the file wins · the doc's version "
+                             f"kept in {saved}")
+        return
+    snap = snapshot(key, file)
+    local = local_md(P, key, file, snap)
     md, chips = merge(b, local, (back, back_blocks))
+    if not same(md, chips, back, back_blocks):  # the file wins somewhere: the doc's version stays in the trash
+        keep_doc_copy(file, data)
     if same(md, chips, *local):
         return
     md, chips = to_file(md, chips, P.view(key, file))
+    if local_hash(key, file) != snap[2]:
+        raise LocalError(f"{file} changed during the merge; nothing written, the next sync merges again")
+    keep_copy(file)
     write(file, md)
     write_blocks(key, file, chips)
-    out.ev("info", file, "the doc's own changes merged into the file")
+    out.ev("info", file, "the doc's own changes merged into the file (the file before: in the trash)")
 
 
 def first_sync(args, mode, P, key, e, tab_id, name, node):
@@ -319,7 +388,7 @@ def first_sync(args, mode, P, key, e, tab_id, name, node):
     if not os.path.exists(e["file"]):
         if mode == "status":
             out.ev("info", e["file"], "new tab in the doc")
-        elif mode in ("sync", "pull"):
+        elif mode in RECEIVES:
             pull_tab(P, key, e, tab_id, name, node)
         return
     data = mcp.read_node(doc_id, node)
@@ -328,17 +397,17 @@ def first_sync(args, mode, P, key, e, tab_id, name, node):
     if same(back, back_blocks, md, blocks):
         if mode != "status":
             save_base(key, e["file"], md, blocks)
-            P.dst(key)["tabs"][tab_id] = {"name": name, "node": node, "rev": data["rev"],
-                                          "hash": local_hash(key, e["file"]), "widgets": {},
-                                          "h1": h1(md), "dhash": doc_hash(data["xml"]), "fmt": 0}
+            P.dst(key)["tabs"][tab_id] = new_tab_state(name, node, data["rev"], hash=local_hash(key, e["file"]),
+                                                       h1=h1(md), dhash=doc_hash(data["xml"]), fmt=0)
             P.save()  # fmt 0: the next sync writes the file again, with its diagrams, as this docsync writes it
         out.ev("insync", e["file"], "in sync")
     elif mode == "status":
         out.ev("info", e["file"], "no sync state on this machine; the file and the tab differ")
     elif mode == "pull" and args.force:  # the local file goes to the trash first
         pull_tab(P, key, e, tab_id, name, node, data)
-    elif mode in ("sync", "push") and args.force:
-        t = {"name": name, "node": node, "rev": data["rev"], "hash": "", "widgets": {}, "h1": h1(back), "fmt": FMT}
+    elif mode in SENDS and args.force:  # an explicit --force, not the project's "local"
+        keep_doc_copy(e["file"], data)
+        t = new_tab_state(name, node, data["rev"], h1=h1(back))
         P.dst(key)["tabs"][tab_id] = t
         push_tab(P, key, e, doc_id, t, data, tab_id)
     else:
@@ -358,7 +427,7 @@ def gone_from_doc(args, mode, P, key, e):
     if mode not in ("sync", "pull"):
         return
     if t and os.path.exists(file) and local_changed(key, file, t):
-        if not args.force or mode == "pull":
+        if not wins(args, mode, P) or mode == "pull":
             out.ev("conflict", file, "deleted in the doc, edited locally · nothing done")
             return
         P.dst(key)["tabs"].pop(e["id"], None)
@@ -414,7 +483,8 @@ def adopt_renamed(P, key):
         hits = [f for f in new if os.path.dirname(f) == os.path.dirname(e["file"])
                 and words(os.path.splitext(os.path.basename(f))[0]) == words(ob)]
         if len(hits) != 1:
-            hits = [f for f in new if local_hash(key, f) == t["hash"]]  # same text; chips are not moved yet
+            hits = [f for f in new if sha(read_text(f) or "", read_text(blocks_path(key, e["file"])) or "")
+                    == t["hash"]]  # the same text, with the chips that are still under the old name
         if len(hits) != 1:
             continue
         nf = hits[0]

@@ -4,16 +4,17 @@ projects whose conflicts are "local" and wakes Claude when the sync fails (async
 import argparse, json, os, subprocess, sys, time
 
 from . import output as out
-from .claude import decide, edit_json, lock, project_settings
-from .files import LOCK, PUSH, SVC
-from .manifest import CONFIG, local_wins
 from . import manifest
-from .projects import mode_of, project_of
+from .claude import decide, edit_json, lock, project_settings
+from .errors import RunError
+from .files import PUSH, SVC
+from .manifest import CONFIG, local_wins
+from .projects import mode_of, project_of, TURN
 from .push import HELD
 from .sync import cmd_sync, local_pending
 from .textio import load_json, write
 
-LAST = PUSH  # the last background push: {"running", "started"}, then its result
+MARKER = PUSH  # the background sync: {"running", "started", "again"}, then its result
 STUCK_S = 600  # a push still "running" after this long is reported as not finished
 WAIT_S = 0.5  # how often stop_wake looks at the background push
 GRACE_S = 10  # how long stop_wake waits for the Stop hook, which runs beside it, to start the push
@@ -26,20 +27,24 @@ def session_start(event):
     if root:
         edit_json(project_settings(root), lock)
 
-def sync_now(root, force=False):
-    """One sync of a project, in this process, quietly. Returns (exit code, the problems as lines).
-    Its events stay in out.EVENTS for the caller."""
+def sync_now(root, force=False):  # force: only for an explicit --force; the policy comes from the manifest
+    """One sync of a project, in this process, quietly. Returns (exit code, the problems as lines, why it stopped
+    early if it did). Its events stay in out.EVENTS for the caller."""
     os.chdir(root)
     out.JSON, out.TTY, out.CONFLICTS = True, False, 0
     out.EVENTS.clear()
     a = argparse.Namespace(config=CONFIG, dirs=[], force=force, cmd="sync")
+    stopped = []
     try:
         cmd_sync(a, a.cmd)
-    except SystemExit as e:
-        return 1, [str(e.code)]
-    problems = [(f"{e['doc']} / " if e["doc"] else "") + f"{e['path']}: {e['detail']}" for e in out.EVENTS
-                if e["kind"] in ("conflict", "warn")]
-    return (2 if out.CONFLICTS else 1 if problems else 0), problems
+    except (RunError, SystemExit) as e:  # the problems found before it stay in the result
+        stopped = [str(e.code if isinstance(e, SystemExit) else e)]
+    problems = [line(e) for e in out.EVENTS if e["kind"] in ("conflict", "warn")] + stopped
+    return (2 if out.CONFLICTS else 1 if problems else 0), problems, stopped
+
+def line(e):
+    """An event as one line for Claude or the user: doc / path: detail."""
+    return (f"{e['doc']} / " if e["doc"] else "") + f"{e['path']}: {e['detail']}"
 
 def created_docs():
     """The docs this sync made: [{"doc", "url"}]."""
@@ -52,52 +57,38 @@ def open_text(docs):
 
 def stop_hook(event):
     """Stop hook, in a project whose sync is "turn": sync when Claude finishes a turn.
-    Conflicts "merge": sync now when there are local edits; a conflict or an error goes back to Claude once, so it
-    merges or fixes the files or tells the user.
-    Conflicts "local": `sync --force` in the background after every turn, both ways (the doc's own changes come down,
-    a tab changed on both sides is merged block by block and the local file wins where both changed the same block);
-    stop_wake tells Claude when it fails, and a failure it could not report (Claude Code ended it, as `claude -p`
-    does) is shown to the user at the end of the next turn."""
+    Conflicts "merge": sync now when there are local edits. Claude gets once, as a block, what it can do something
+    about: tabs to merge (the doc's version is beside the file), comments for Claude in the way, errors; after one
+    try it is not blocked again. Conflicts that only the user can decide go to the user, once.
+    Conflicts "local": a sync in the background after every turn, both ways; stop_wake tells Claude when it fails,
+    and a failure it could not report (Claude Code ended it, as `claude -p` does) is shown to the user at the end of
+    the next turn."""
     root = project_of(event.get("cwd") or os.getcwd())
-    if not root or mode_of(root) != "turn" or not os.path.exists(os.path.join(root, CONFIG)):
+    if not root or mode_of(root) != TURN or not os.path.exists(os.path.join(root, CONFIG)):
         return None
     os.chdir(root)
-    last = load_json(LAST) if os.path.exists(LAST) else None
     if local_wins(manifest.load(CONFIG)):
-        notice = None
-        stuck = last and last.get("running") and time.time() - last.get("started", 0) > STUCK_S
-        if last and (last.get("rc") or stuck) and not last.get("shown"):
-            why = "did not finish" if stuck else "failed: " + "; ".join(last.get("problems", []))
-            notice = {"systemMessage": "docs-local: the last background sync " + why}
-            last["shown"] = True
-            write(LAST, json.dumps(last, ensure_ascii=False))
-        if not (last and last.get("running") and not stuck):
-            os.makedirs(SVC, exist_ok=True)
-            write(LAST, json.dumps({"running": True, "started": time.time()}))
-            subprocess.Popen([sys.executable, SCRIPT, "push-background"], cwd=root, start_new_session=True,
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return notice
+        return start_background(root)
     if not local_pending(CONFIG):
         return None
-    rc, problems = sync_now(root)
+    rc, problems, stopped = sync_now(root)
     made = created_docs()
-    if rc == 0 and not made:
-        return None
-    if rc == 0:
-        return {"decision": "block", "reason": "docs-local sync. " + open_text(made)}
     sent = [e["path"] for e in out.EVENTS if e["kind"] in ("pushed", "created")]
-    conflicts = [e["path"] for e in out.EVENTS if e["kind"] == "conflict"]
+    mergeable = [e for e in out.EVENTS if e["kind"] == "conflict" and e.get("merge")]
     held = [e for e in out.EVENTS if e.get("asks")]
-    errors = [p for p in problems if "changed locally and in the doc" not in p and HELD not in p]
-    if event.get("stop_hook_active") and not conflicts:  # after one try: tell the user, do not loop
-        return {"systemMessage": "docs-local: " + "; ".join(problems)}
-    parts = ["docs-local sync."]
-    if sent:
-        parts.append("Sent to the doc: " + ", ".join(sent) + ".")
-    if conflicts:
-        parts.append("These tabs changed in the doc too: " + ", ".join(conflicts) + ". For each one, read the doc's "
-                     "version of the tab with the Docs tools, merge it with your edits in the local file, and keep "
-                     "both sides' changes. When you finish, the sync sends the merged file.")
+    errors = [line(e) for e in out.EVENTS if e["kind"] == "warn" and not e.get("asks")] + stopped
+    for_user = [line(e) for e in out.EVENTS if e["kind"] == "conflict" and not e.get("merge")]
+    notice = once(for_user)
+    if event.get("stop_hook_active") and not any(e.get("new") for e in mergeable):
+        # Claude had its try and the doc did not change again: what is left goes to the user, and the turn ends
+        rest = [line(e) for e in mergeable + held] + errors
+        return {"systemMessage": "docs-local: " + "; ".join(rest + for_user)} if rest or for_user else None
+    parts = []
+    if mergeable:
+        parts.append("These tabs changed in the doc too, so nothing was sent or written over: "
+                     + "; ".join(f"{e['path']} (the doc's version: {e['theirs']})" for e in mergeable) + ". For each "
+                     "one, merge the doc's version into the local file and keep both sides' changes; do not edit the "
+                     ".from-doc.md file. When you finish, the sync sends the merged file.")
     if held:
         parts.append(held_text(held))
     if errors:
@@ -105,7 +96,46 @@ def stop_hook(event):
                      "the user.")
     if made:
         parts.append(open_text(made))
-    return {"decision": "block", "reason": " ".join(parts)}
+    if not parts:
+        return notice
+    if sent:
+        parts.insert(0, "Sent to the doc: " + ", ".join(sent) + ".")
+    return {"decision": "block", "reason": "docs-local sync. " + " ".join(parts), **(notice or {})}
+
+def once(lines):
+    """A message for the user about these problems, unless the same ones were shown last time."""
+    path = os.path.join(SVC, "notice.json")
+    if not lines:
+        if os.path.exists(path):
+            os.remove(path)
+        return None
+    if os.path.exists(path) and load_json(path) == sorted(lines):
+        return None
+    os.makedirs(SVC, exist_ok=True)
+    write(path, json.dumps(sorted(lines), ensure_ascii=False))
+    return {"systemMessage": "docs-local: only you can decide these: " + "; ".join(lines)
+                             + " (docsync pull --force takes the doc's version, docsync push --force the file's)"}
+
+def start_background(root):
+    """Conflicts "local": start the background sync, or ask the one running to run once more when it ends. Returns a
+    message for the user about a failure that Claude was not told about."""
+    last = load_json(MARKER) if os.path.exists(MARKER) else {}
+    notice = None
+    stuck = last.get("running") and time.time() - last.get("started", 0) > STUCK_S
+    if (last.get("rc") or stuck) and not last.get("shown"):
+        why = "did not finish" if stuck else "failed: " + "; ".join(last.get("problems", []))
+        notice = {"systemMessage": "docs-local: the last background sync " + why}
+        last["shown"] = True
+    if last.get("running") and not stuck:
+        last["again"] = True  # this turn's edits: the running sync goes once more
+        write(MARKER, json.dumps(last, ensure_ascii=False))
+        return notice
+    os.makedirs(SVC, exist_ok=True)
+    write(MARKER, json.dumps({"running": True, "started": time.time(), "woken": last.get("woken", [])},
+                           ensure_ascii=False))
+    subprocess.Popen([sys.executable, SCRIPT, "sync-background"], cwd=root, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return notice
 
 def held_text(held):
     """For Claude: the tabs that a comment asking Claude held back, with each comment and the calls to answer it."""
@@ -114,11 +144,13 @@ def held_text(held):
     for e in held:
         c = {"kind": "project", "id": e["doc_id"]}
         for a in e["asks"]:
-            lines.append(f"- {e['doc']} / {e['path']}: thread {a['thread']}, the comment says: {json.dumps(a['text'], ensure_ascii=False)}. "
+            says = json.dumps(a["text"], ensure_ascii=False)
+            lines.append(f"- {e['doc']} / {e['path']}: thread {a['thread']}, the comment says: {says}. "
                          f"Its replies: Docs query with object \"utterance\", container {json.dumps(c)}, payload "
                          + json.dumps({"under": {"object": "utterance", "id": a["thread"]}}) + ". Reply: Docs create "
                          f"with object \"utterance\", container {json.dumps(c)}, payload "
-                         + json.dumps({"value": {"body": "<your reply>", "parent": {"object": "utterance", "id": a["thread"]}}}) + ".")
+                         + json.dumps({"value": {"body": "<your reply>",
+                                                 "parent": {"object": "utterance", "id": a["thread"]}}}) + ".")
     lines.append("If your edit does what a comment asks, reply in its thread and say what you changed; the sync sends "
                  "the tab when you finish. If it does not, keep some of the comment's words, or ask the user.")
     return "\n".join(lines)
@@ -129,14 +161,14 @@ def stop_wake(event):
     return (2, what Claude must do). The sync runs in a process of its own, so it finishes even when Claude Code ends
     this hook early (`claude -p` does); then the next Stop shows the failure to the user instead."""
     root = project_of(event.get("cwd") or os.getcwd())
-    if not root or mode_of(root) != "turn" or not os.path.exists(os.path.join(root, CONFIG)):
+    if not root or mode_of(root) != TURN or not os.path.exists(os.path.join(root, CONFIG)):
         return 0, ""
     os.chdir(root)
     if not local_wins(manifest.load(CONFIG)):
         return 0, ""
     t0 = time.time()
     while True:
-        last = (load_json(LAST) if os.path.exists(LAST) else None) or {}
+        last = (load_json(MARKER) if os.path.exists(MARKER) else None) or {}
         mine = last.get("started", 0) >= t0 - GRACE_S  # started for this Stop, not for an earlier one
         if mine and not last.get("running"):
             break
@@ -147,8 +179,11 @@ def stop_wake(event):
         time.sleep(WAIT_S)
     if (not last.get("rc") and not last.get("created")) or last.get("shown"):
         return 0, ""
+    if last.get("rc") and not last.get("created") and sorted(last.get("problems", [])) == last.get("woken"):
+        return 0, ""  # Claude was woken for these already: the next Stop tells the user instead
     last["shown"] = True
-    write(LAST, json.dumps(last, ensure_ascii=False))
+    last["woken"] = sorted(last.get("problems", []))
+    write(MARKER, json.dumps(last, ensure_ascii=False))
     if not last.get("rc"):
         return 2, "docs-local: " + open_text(last["created"])
     parts = ["docs-local: the background sync after your last turn did not finish everything."]
@@ -174,29 +209,28 @@ def hook_wake(args):
         sys.stderr.write(text + "\n")
     sys.exit(code)
 
-def push_background(args):
-    """For the Stop hook of a project whose conflicts are "local": sync --force, one at a time per project, the result
-    kept in .docsync/push.json."""
+def sync_background(args):
+    """For the Stop hook of a project whose conflicts are "local": a sync, both ways, the result kept in
+    .docsync/push.json; once more while a Stop asked for it during the run. cmd_sync takes the project's lock."""
     root = os.getcwd()
-    marker = load_json(os.path.join(root, LAST)) if os.path.exists(os.path.join(root, LAST)) else {}
-    os.makedirs(os.path.join(root, SVC), exist_ok=True)
-    with open(os.path.join(root, LOCK), "w", encoding="utf-8") as lock:
-        try:
-            import fcntl
-            fcntl.flock(lock, fcntl.LOCK_EX)
-        except ImportError:  # Windows has no fcntl
-            import msvcrt
-            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+    path = os.path.join(root, MARKER)
+    while True:
         held, made = [], []
         try:
-            rc, problems = sync_now(root, force=True)
+            rc, problems, _ = sync_now(root)
             held = [{k: e[k] for k in ("doc", "path", "doc_id", "asks")} for e in out.EVENTS if e.get("asks")]
             made = created_docs()
         except Exception as e:  # any crash still ends in a result, so the marker never stays "running"
             rc, problems = 1, [f"{type(e).__name__}: {e}"]
-    write(os.path.join(root, LAST), json.dumps({"rc": rc, "problems": problems, "started": marker.get("started", 0),
-                                                **({"held": held} if held else {}),
-                                                **({"created": made} if made else {})}, ensure_ascii=False))
+        marker = (load_json(path) if os.path.exists(path) else None) or {}
+        again = marker.get("again") and rc == 0
+        write(path, json.dumps({"rc": rc, "problems": problems, "woken": marker.get("woken", []),
+                                **({"running": True, "started": time.time()} if again else
+                                   {"started": marker.get("started", 0)}),
+                                **({"held": held} if held else {}), **({"created": made} if made else {})},
+                               ensure_ascii=False))
+        if not again:
+            return
 
 def hook(args):
     """Claude Code hooks: SessionStart, Stop (send the local edits when Claude finishes a turn) and the guard on the

@@ -1,13 +1,14 @@
 """docsync — keep claude.ai Docs as local markdown files (the source of truth) and sync them.
 
 A sync is safe when several people edit a doc: a tab changed both here and in the doc is a conflict, and nothing
-is overwritten. sync --force (a project whose conflicts are "local") merges such a tab block by block and the local
-file wins where both changed the same blocks. A push changes only the paragraphs, list items and table rows that
-changed, so a comment keeps its place while some of its words stay (docmodel/edits.py).
+is overwritten. In a project whose conflicts are "local", a sync merges such a tab block by block, and the local file
+wins where both changed the same blocks; --force makes the local files win whole. A push changes only the paragraphs,
+list items and table rows that changed, so a comment keeps its place while some of its words stay
+(docmodel/edits.py).
 
   docsync [sync]            sync the project you are in; in a folder that holds projects, those;
                             elsewhere, all your projects
-  docsync status            what sync would do, changes nothing
+  docsync status            what sync would do; changes nothing (an older project is first moved to this version)
   docsync pull | push       one direction only
   --force                   sync, push: the local files win; pull: the doc wins (local edits go to the trash)
   docsync doc add <link> [dir]   set up a doc in this project (docs/<name>/ by default) and pull it
@@ -41,28 +42,30 @@ Login: none of its own. Run in a Claude Code session, docsync calls the Claude D
 (the plugin's hooks module starts `docsync bridge` and sets DOCSYNC_BRIDGE); elsewhere it uses Claude Code's stored
 claude.ai login, read on each run and never stored by docsync.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
-When: "manual" (you run docsync) or "turn" (a hook syncs when Claude finishes a turn). Conflicts: "merge" (the hook
-syncs at once and hands a conflict to Claude) or "local" (the hook syncs in the background with --force).
+When: "manual" (you run docsync) or "turn" (a hook syncs when Claude finishes a turn). Conflicts: "merge" (a conflict
+is for Claude or you to merge; the hook syncs at once) or "local" (merged block by block; the hook syncs in the
+background).
 Output: for people; one JSON document with --json.
-Exit codes: 0 done, 1 error, 2 conflicts.
+Exit codes: 0 done; 1 an error, or a warning (a tab not synced, held back by a comment, or written but reading
+differently); 2 conflicts.
 """
 import argparse, json, os, platform, re, shutil, sys
 
 from . import bridge, importer, manifest, output as out
-from .claude import (FILES, PLUGIN, edit_json, hide, installed, lock, project_settings, turn_off,
-                     turn_on, unhide, unlock, user_settings)
-from .files import posix, slug
-from .hooks import hook, hook_wake, push_background
-from .manifest import CONFIG
+from .claude import (edit_json, FILES, hide, installed, lock, PLUGIN, project_settings, turn_off, turn_on, unhide,
+                     unlock, user_settings)
+from .errors import RunError
+from .files import locked, posix, slug
+from .hooks import hook, hook_wake, sync_background
+from .manifest import CONFIG, CONFLICTS
 from .mcp import call
-from .projects import (load_user, mode_of, project_name, project_of, project_state, projects, save_user, set_mode,
-                       targets, user_config)
+from .projects import (load_user, mode_of, MODES, project_manifest, project_name, project_of, project_state, projects,
+                       save_user, set_mode, targets, user_config)
 from .push import ARTIFACT
 from .sync import cmd_sync
 from .textio import load_json, read, write
 
-MODES = ("manual", "turn")  # when this machine syncs: when the user runs docsync, when Claude finishes a turn
-CONFLICTS = ("merge", "local")  # a tab changed on both sides: Claude merges, or the local file wins
+HOOKS = ("hook", "hook-wake", "sync-background", "bridge")  # run by Claude Code or the hooks, not by people
 RESULT = []
 
 
@@ -76,7 +79,6 @@ def doc_id_from(link):
 
 def doc_add(args):
     root = project_of(os.getcwd()) or os.path.realpath(os.getcwd())
-    turn_on(root)
     os.chdir(root)
     out.CTX["project"] = project_name(root)
     doc_id = doc_id_from(args.link)
@@ -84,17 +86,14 @@ def doc_add(args):
     o = call("read", {"ref": {"object": "project", "id": doc_id}}, soft=True)
     if o.get("verdict") != "allow":
         sys.exit(f"cannot read that doc (deleted, no access, or not a Claude Doc): {args.link}")
+    turn_on(root)  # only once the link is a doc this account can read
     name = o["value"].get("name") or doc_id
-    cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else {}
-    cfg.setdefault("schema", manifest.SCHEMA)
-    cfg.setdefault("name", os.path.basename(root.rstrip(os.sep)) or root)
-    cfg.setdefault("conflicts", "merge")
-    cfg.setdefault("docs", {})
+    cfg = project_manifest(root)
     for k, v in cfg["docs"].items():
         if v.get("id") == doc_id:
             sys.exit(f"already set up as {k} ({manifest.doc_dir(k, v)})")
     key = manifest.unique(slug(os.path.basename((args.dir or "").rstrip("/")) or name), cfg["docs"])
-    d = posix(args.dir or os.path.join("docs", key))
+    d = posix(args.dir or os.path.join(manifest.DOCS, key))
     if any(manifest.doc_dir(k, v) == d for k, v in cfg["docs"].items()) or (os.path.exists(d) and os.listdir(d)):
         sys.exit(f"{d} is already used; pass another folder: docsync doc add <link> <dir>")
     cfg["docs"][key] = {"id": doc_id, "name": name, "dir": d, "tabs": []}
@@ -125,8 +124,7 @@ def in_project():
         sys.exit("not in a project: turn it on with /docs-local in Claude Code, or docsync project use")
     here = os.getcwd()
     os.chdir(root)
-    return root, here, manifest.load(CONFIG) if os.path.exists(CONFIG) else \
-        {"schema": manifest.SCHEMA, "name": os.path.basename(root), "conflicts": "merge", "docs": {}}
+    return root, here, project_manifest(root)
 
 
 def tab_file(root, here, path):
@@ -142,10 +140,14 @@ def tab_add(args):
     taken = manifest.mapped(cfg)
     if f in taken:
         sys.exit(f"{f}: already a tab of {taken[f][0]}")
+    if not f or f.startswith("../") or os.path.isabs(f):
+        sys.exit(f"{args.file}: not inside the project")
     key = args.doc or next((k for k, d in cfg["docs"].items()
                             if posix(os.path.dirname(f)) == manifest.doc_dir(k, d)), None)
     if key not in cfg["docs"]:
         sys.exit("which doc? docsync tab add FILE --doc <doc key> (keys: " + ", ".join(cfg["docs"]) + ")")
+    if manifest.name_taken(cfg, key, f):
+        sys.exit(f"{f}: another tab of {key} has a file of this name; rename the file")
     e = {"id": None, "file": f}
     if args.parent:
         e["parent"] = parent_id(cfg, key, tab_file(root, here, args.parent))
@@ -169,7 +171,10 @@ def tab_parent(args):
     if not e:
         sys.exit(f"{f}: not a tab")
     if args.parent:
-        e["parent"] = parent_id(cfg, key, tab_file(root, here, args.parent))
+        parent = parent_id(cfg, key, tab_file(root, here, args.parent))
+        if parent == e.get("id"):
+            sys.exit(f"{f}: a tab cannot be under itself")
+        e["parent"] = parent
     else:
         e.pop("parent", None)
     manifest.save(cfg)
@@ -234,8 +239,7 @@ def set_conflicts(root, conflicts):
     here = os.getcwd()
     os.chdir(root)
     try:
-        cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else \
-            {"schema": manifest.SCHEMA, "name": os.path.basename(root), "docs": {}}
+        cfg = project_manifest(root)
         cfg["conflicts"] = conflicts
         manifest.save(cfg)
     finally:
@@ -272,7 +276,8 @@ import json, os, sys
 base = os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR") or os.path.join(
     os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "plugins")
 try:
-    recs = json.load(open(os.path.join(base, "installed_plugins.json"), encoding="utf-8"))["plugins"]["{PLUGIN}"]
+    with open(os.path.join(base, "installed_plugins.json"), encoding="utf-8") as f:
+        recs = json.load(f)["plugins"]["{PLUGIN}"]
     root = next((r for r in recs if r.get("scope") == "user"), recs[0])["installPath"]
 except (OSError, ValueError, KeyError, IndexError, TypeError):
     sys.exit("docs-local is not installed in Claude Code: claude plugin install {PLUGIN}")
@@ -294,7 +299,8 @@ def shell_command():
     os.chmod(link, 0o755)
     on_path = d in os.environ.get("PATH", "").split(os.pathsep)
     shell = os.path.basename(os.environ.get("SHELL", ""))
-    rc = {"zsh": "~/.zshrc", "bash": "~/.bashrc", "fish": "~/.config/fish/config.fish"}.get(shell, "your shell's startup file")
+    rc = {"zsh": "~/.zshrc", "bash": "~/.bashrc", "fish": "~/.config/fish/config.fish"}.get(
+        shell, "your shell's startup file")
     line = f"fish_add_path {d}" if shell == "fish" else f'export PATH="{d}:$PATH"'
     return {"command": link, "on_path": on_path, "add_to_path": None if on_path else f"{rc}: {line}"}, None
 
@@ -332,6 +338,8 @@ def setup(args):
     if mode not in MODES:
         sys.exit("no saved mode: ask the user, then run docsync setup --mode manual|turn")
     u["sync"] = mode
+    if args.conflicts:
+        u["conflicts"] = args.conflicts  # also the default of the projects turned on later
     save_user(u)
     errors, todo = [], []
     plugins = {p: (installed(p) or {}).get("version") for p in (PLUGIN, FILES)}
@@ -354,14 +362,14 @@ def setup(args):
         if os.path.isdir(r):
             edit_json(project_settings(r), lock)
     shell = None
-    if mode == "manual":
-        shell, err = shell_command()
-        if err:
-            errors.append(err)
-        elif shell.get("add_to_path"):
-            todo.append("add to " + shell["add_to_path"])
+    shell, err = shell_command()  # the `docsync` command for people, whatever the mode
+    if err:
+        errors.append(err)
+    elif shell.get("add_to_path"):
+        todo.append("add to " + shell["add_to_path"])
     if first or new:  # Claude Code loads plugins at session start, not while a session runs
-        todo.append("start a new Claude Code session (or run /reload-plugins)" + (" in: " + ", ".join(new) if new else ""))
+        todo.append("start a new Claude Code session (or run /reload-plugins)"
+                    + (" in: " + ", ".join(new) if new else ""))
     print(json.dumps({"ok": not errors, "mode": mode, "plugins": plugins, "projects": projects(), "shell": shell,
                       "todo": todo, "errors": errors}, ensure_ascii=False, indent=1))
     if errors:
@@ -433,15 +441,15 @@ def run_sync(args):
 
 
 def parser():
-    p = argparse.ArgumentParser(prog="docsync", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(prog="docsync", description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd")
     for c, h in (("sync", "sync both ways (the default)"), ("status", "what sync would do"),
                  ("pull", "doc -> local only"), ("push", "local -> doc only")):
         a = sub.add_parser(c, help=h)
         a.add_argument("dirs", nargs="*", help="limit to these doc folders")
         a.add_argument("--force", action="store_true", help="override the safety checks")
-        a.add_argument("--json", action="store_true", help="one JSON document (the default in mode model)")
-        a.add_argument("--human", action="store_true", help="output for people (the default in mode user)")
+        a.add_argument("--json", action="store_true", help="one JSON document instead of output for people")
     doc = sub.add_parser("doc", help="docs of the current project").add_subparsers(dest="sub", required=True)
     a = doc.add_parser("add", help="set up a doc here and pull it")
     a.add_argument("link")
@@ -482,24 +490,37 @@ def parser():
     a.add_argument("action", nargs="?", choices=["scan"], help="scan: list the folders to ask about (JSON)")
     a.add_argument("--mode", choices=sorted(MODES), help="when this machine syncs (the saved choice when left out)")
     a.add_argument("--conflicts", choices=CONFLICTS, help="for the projects of --project: merge or local")
-    a.add_argument("--project", action="append", default=[], metavar="FOLDER", help="turn local docs on here; repeatable")
+    a.add_argument("--project", action="append", default=[], metavar="FOLDER",
+                   help="turn local docs on here; repeatable")
     sub.add_parser("hook", help="for Claude Code: the hooks on the Docs tools that write and on Stop")
     sub.add_parser("hook-wake", help="for Claude Code: the background Stop hook of a project whose conflicts are local")
-    sub.add_parser("push-background", help="for that hook: sync --force, result in .docsync/push.json")
+    sub.add_parser("sync-background", help="for that hook: sync --force, result in .docsync/push.json")
     sub.add_parser("bridge", help="for the plugin's hooks module: the broker to the session's Claude Docs connector")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     return p
 
 
+def under_lock(fn):
+    """A command that writes the manifest: it holds the project's lock, as a sync does."""
+    def run(args):
+        root = project_of(os.getcwd())
+        if not root:
+            return fn(args)
+        with locked(root):
+            return fn(args)
+    return run
+
+
 COMMANDS = {
-    "doc": {"add": doc_add, "list": doc_list, "import": importer.cmd_import, "rename": doc_rename},
-    "tab": {"add": tab_add, "parent": tab_parent},
+    "doc": {"add": under_lock(doc_add), "list": doc_list, "import": under_lock(importer.cmd_import),
+            "rename": under_lock(doc_rename)},
+    "tab": {"add": under_lock(tab_add), "parent": under_lock(tab_parent)},
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove,
-                "mode": project_mode, "conflicts": project_conflicts, "name": project_rename},
+                "mode": project_mode, "conflicts": under_lock(project_conflicts), "name": under_lock(project_rename)},
     "setup": {None: setup},
     "hook": {None: hook},
     "hook-wake": {None: hook_wake},
-    "push-background": {None: push_background},
+    "sync-background": {None: sync_background},
     "bridge": {None: lambda args: bridge.serve()},
     "uninstall": {None: uninstall},
 }
@@ -518,6 +539,10 @@ def main(argv=None):
             out.TTY = False
     try:
         COMMANDS.get(args.cmd, {}).get(getattr(args, "sub", None), run_sync)(args)
+    except RunError as e:
+        sys.exit(f"docsync: {e}")
     finally:
         out.clear_live()
-    sys.exit(2 if out.CONFLICTS else 0)  # 0 done, 1 error (sys.exit with a message), 2 conflicts
+    if args.cmd in HOOKS:  # Claude Code reads a hook's JSON on exit 0; hook-wake exits by itself
+        sys.exit(0)
+    sys.exit(2 if out.CONFLICTS else 1 if out.STATS.get("warn") else 0)  # see "Exit codes" in the help

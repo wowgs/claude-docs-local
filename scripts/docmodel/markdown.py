@@ -12,19 +12,34 @@ FENCE_LINE = re.compile(r"\s*(`{3,})")
 ATTR_LINE = re.compile(r"\s*<!-- docsync (\{.*\}) -->\s*$")  # attributes of the block below it that markdown has no syntax for
 
 
+TAGS = re.compile(r"(?<!\\)</?(?:u|mark)>")  # underline and highlight: the doc's markdown does not read them
+
+
+def in_fence(lines):
+    """For each line: is it fenced code or a fence? A fence closes on a line of backticks as long as it or longer, so
+    a ``` line inside a ```` fence is code. The one fence scanner of docsync."""
+    flags, fence = [], None
+    for line in lines:
+        f = FENCE_LINE.match(line)
+        if fence:
+            flags.append(True)
+            if f and line.strip() == f.group(1) and len(f.group(1)) >= len(fence):
+                fence = None
+        elif f:
+            fence = f.group(1)
+            flags.append(True)
+        else:
+            flags.append(False)
+    return flags
+
+
 def outside_code(md, fn):
     """md with fn applied to each piece of a line outside fenced code and code spans: a chip placeholder or a tag
     inside code is text (the doc keeps `<?claude block x?>` in a code span as those characters)."""
-    out, fence = [], None
-    for line in md.split("\n"):
-        f = FENCE_LINE.match(line)
-        if fence:
-            out.append(line)
-            if f and line.strip() == f.group(1) and len(f.group(1)) >= len(fence):
-                fence = None
-            continue
-        if f:
-            fence = f.group(1)
+    out = []
+    lines = md.split("\n")
+    for line, code in zip(lines, in_fence(lines)):
+        if code:
             out.append(line)
             continue
         parts, last = [], 0
@@ -33,6 +48,19 @@ def outside_code(md, fn):
             last = m.end()
         out.append("".join(parts + [fn(line[last:])]))
     return "\n".join(out)
+
+
+NODE = "node/"  # an embed's ref: the widget it shows
+
+
+def widget_id(ref):
+    """The widget of an embed's ref, or None when the ref is not a widget's."""
+    return ref[len(NODE):] if (ref or "").startswith(NODE) else None
+
+
+def chip_text(key):
+    """A chip's placeholder in markdown, as the doc's own markdown writes it."""
+    return f"<?claude block {key}?>"
 
 
 def sub_chips(md, repl):
@@ -45,6 +73,13 @@ def chip_keys(md):
     keys = []
     sub_chips(md, lambda m: keys.append(m.group(1)) or m.group(0))
     return keys
+
+
+def server_md(md):
+    """Markdown as the doc's markdown reads it: without the lines of block attributes and the <u> and <mark> tags
+    (their text stays). The next pass of a push writes those with `set` and `as: blocks`."""
+    md = "\n".join(l for l in md.split("\n") if not ATTR_LINE.match(l))
+    return outside_code(md, lambda s: TAGS.sub("", s))
 
 
 def attrs_line(attrs):
@@ -87,7 +122,7 @@ class Md:
     def chip(self, spec):
         key = f"c{len(self.blocks) + 1}"
         self.blocks[key] = spec
-        return f"<?claude block {key}?>"
+        return chip_text(key)
 
     def runs(self, el, marks=()):
         """Flatten a <text> element into (text, marks) runs."""
@@ -131,7 +166,8 @@ class Md:
             elif c["tag"] == "comment":  # where a comment thread starts: the server paints it on a read, no text
                 continue
             else:
-                raise Unsupported(f"the doc has <{c['tag']}> in a paragraph, which docsync cannot write as markdown yet")
+                raise Unsupported(f"the doc has <{c['tag']}> in a paragraph, which docsync cannot write as markdown "
+                                  "yet")
         merged = []
         for t, m in runs:
             if merged and t is not None and merged[-1][0] is not None and merged[-1][1] == m:

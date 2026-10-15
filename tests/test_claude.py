@@ -56,12 +56,6 @@ class Settings(Sandbox):
         c.unhide(s)
         self.assertNotIn("enabledPlugins", s)
 
-    def test_plugin_root_from_the_install_record(self):
-        self.assertIsNone(c.plugin_root())
-        self.write("claude/plugins/installed_plugins.json", json.dumps({"version": 2, "plugins": {c.PLUGIN: [
-            {"scope": "user", "installPath": "/cache/wowgs/docs-local/2.0.0", "version": "2.0.0"}]}}))
-        self.assertEqual(c.plugin_root(), "/cache/wowgs/docs-local/2.0.0")
-
 
 class Hook(Sandbox):
     def setUp(self):
@@ -122,9 +116,6 @@ class Hook(Sandbox):
             self.assertIsNone(c.decide(outside))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class SessionStart(Sandbox):
     def test_writes_a_projects_settings_only_when_they_are_wrong(self):
@@ -139,3 +130,7 @@ class SessionStart(Sandbox):
         os.utime(f, (1, 1))
         hooks.session_start({"hook_event_name": "SessionStart", "cwd": root})
         self.assertEqual(os.path.getmtime(f), 1)  # already right: not written again
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -103,7 +103,7 @@ class Cli(Sandbox):
         self.assertIn("start a new Claude Code session (or run /reload-plugins)", first["todo"])  # plugins load then
         again = self.setup()
         self.assertEqual(again["mode"], "turn")  # the saved choice
-        self.assertEqual(again["todo"], [])
+        self.assertEqual([t for t in again["todo"] if not t.startswith("add to")], [])  # PATH: as the machine is
 
     def test_setup_scan_lists_the_folders_claude_code_has_seen(self):
         os.makedirs(self.path("other"))
@@ -142,7 +142,7 @@ class Cli(Sandbox):
         self.assertIn("docs-local-files@wowgs is not installed: claude plugin install docs-local-files@wowgs",
                       out["errors"])
         self.assertIn("not a folder: " + self.path("nowhere"), out["errors"])
-        self.assertIsNone(out["shell"])  # mode auto: no shell command
+        self.assertTrue(out["shell"]["command"].endswith("/bin/docsync"))  # the shell command, in every mode
 
     def test_shell_command_runs_the_installed_plugin(self):
         out = self.setup("--mode", "manual", ok=False)  # nothing installed yet
@@ -179,6 +179,7 @@ class Cli(Sandbox):
                          {"permissions": {"deny": ["Bash(rm *)"]}})
         self.assertFalse(os.path.lexists(os.path.join(self.env["XDG_BIN_HOME"], "docsync")))
         self.assertFalse(os.path.exists(self.path("xdg/docsync")))
+
 
 if __name__ == "__main__":
     unittest.main()

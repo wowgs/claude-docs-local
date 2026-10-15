@@ -139,9 +139,6 @@ class Split(unittest.TestCase):
         self.assertIsNone(blocks.rows_of("| a |\nno separator"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class Attributes(unittest.TestCase):
     """What markdown has no syntax for: written with set, or as block content."""
@@ -184,3 +181,7 @@ class Attributes(unittest.TestCase):
 def json_of(o):
     import json
     return json.dumps(o, sort_keys=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

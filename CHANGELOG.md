@@ -2,6 +2,30 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.1.0 — 2026-10-15
+
+A full review of 4.0.0 by five agents (design, sync correctness, code quality, tests, hooks and texts) found these problems; each one marked "reproduced" was reproduced against the fake server before the fix, and each fix has a test.
+
+Data that could be lost:
+- **A conflict was sent at the second sync even when nobody merged it** (reproduced). The sync now records the file's hash with the conflict and sends the file only once it changed since; until then the tab stays a conflict. The doc's version is written beside the file, `.docsync/<doc key>/<tab>.from-doc.md`, for Claude or the user to merge from.
+- **The Stop hook exited with code 2 after a conflict** (reproduced: `cli.main` ended every command with the conflict exit code). The hook now always exits 0, so Claude Code reads its JSON.
+- **Any refused or unreadable read of a doc counted as "doc deleted"** (reproduced): its files went to the trash and it left `docsync.json`. Only the doc's own answer for a deleted or unshared doc (`deny`, reason `access`, checked against the real server on 2026-10-15) does that now; anything else is a warning for that doc.
+- **An edit made while a sync ran was lost** (reproduced for push and for pull). A push now records the hash of exactly what it sent, so an edit made during it is sent by the next sync. A pull and a merge check the file again just before they write it, and write nothing when it changed.
+- **The block merge of "local" lost the doc's changes next to local ones** (reproduced: a change in the next block, and paragraphs added at the end on both sides). Inside a region both sides changed, the merge now pairs each block with its versions and decides block by block; what either side inserted is kept. When the merge drops anything of the doc's, the doc's version goes to the trash.
+- **On a machine with no sync state, the "local" policy pushed a possibly stale file from git over the doc** (reproduced). Only an explicit `--force` does that now, and the doc's version goes to the trash first; the background sync of "local" leaves it a conflict. The project's `conflicts` now applies to every `docsync sync`, not only the hook's, and stays apart from `--force`.
+- **A rename in the doc could move a tab's file onto the file of another tab** (reproduced), **two tab files of one name shared their chips and bases** (reproduced), and **a hand rename of a file with chips deleted its tab in the doc** (reproduced). A rename now never takes a path that another tab maps or whose name another tab of the doc has; two tab files of one name stop their doc with a clear error, and `tab add` and `doc import` refuse them; a hand rename is matched with the tab's chips.
+- **Two docsync processes at once rolled the state back** (reproduced in one process; the lock is tested with two). Every command that writes, including a sync in a terminal, now holds the project's lock, `.docsync/lock`.
+- **A push that reads back differently** now keeps the file as sent in the trash; **a write of `state.json`, `push.json` or `docsync.json` is atomic** (a temporary file, then a rename), so a hook never reads half a file; **a tab larger than one write is no longer cut inside fenced code**.
+
+Hooks, guard, setup:
+- In "merge", Claude is blocked once for what it can fix; after its try, it is blocked again only for a tab that changed in the doc again. Conflicts only the user can decide (a tab deleted here and changed in the doc, a file from git with no sync state) go to the user once, with the commands that decide them. In "local", Claude is not woken twice for the same problems, and a turn that ends while a background sync runs makes it run once more.
+- The bridge passes only the calls docsync makes; it refuses, for example, deleting a doc. The guard on the Docs tools now also applies when the session's folder is not the project but the doc is one kept as files. When the guard itself fails, only the Claude Docs tools are refused.
+- The hooks module starts the bridge with the plugin's own `bin/docsync` first. Setup installs the `docsync` command in every mode. Setup's answer about conflicts is kept as the default for projects turned on later.
+- `importer` heuristics no longer report code as a loss. `doc add` turns a project on only once the link is a readable doc. `tab parent` refuses a tab as its own parent, `tab add` a file outside the project.
+- Exit codes: 1 also for a warning (a tab not synced, held back, or reading differently).
+
+Code: library code raises typed errors (`Refused`, `LocalError` for one tab or doc, `RunError` for the run) instead of `sys.exit`, so one tab no longer ends a run; the hooks sort problems by event kind, not by message text; one fence scanner; the decision of `sync_tab` is a pure function with a table test; shared helpers replace repeated code (tab state, renamed path, doc patch, JSON save, chips load, widget ids); named constants for modes, conflicts and paths; dead code and pre-4.0 names removed (`push-background` is now `sync-background`). Tests: 218 (189 before), line coverage 89.1% (85.1% before), measured with a line tracer over the whole suite.
+
 ## 4.0.0 — 2026-10-15
 
 Breaking: the structure of `docsync.json` (schema 3) and of the user config (schema 3) changes. docsync moves both the first time it reads them; nothing to do by hand.

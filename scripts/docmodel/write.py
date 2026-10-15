@@ -1,11 +1,11 @@
 """Markdown on its way to the doc: what one write sends, and what the doc would not read back as written."""
 import re
 
+from .blocks import split_blocks
 from .errors import NotPushable
-from .markdown import ATTR_LINE, CELL_BREAK, CODE_SPAN, chip_keys, outside_code
+from .markdown import CELL_BREAK, chip_keys, CODE_SPAN, server_md
 
 CAP = 30000  # server cap is 32768 bytes of inline content per write
-TAGS = re.compile(r"(?<!\\)</?(?:u|mark)>")  # underline and highlight: the doc's markdown does not read them
 
 
 def check_pushable(md, where):
@@ -17,22 +17,16 @@ def check_pushable(md, where):
                               "written back; make it one paragraph, or edit that cell in the doc")
 
 
-def server_md(md):
-    """Markdown as the doc's markdown reads it: without the lines of block attributes and the <u> and <mark> tags
-    (their text stays). The next pass of a push writes those with `set` and `as: blocks`."""
-    md = "\n".join(l for l in md.split("\n") if not ATTR_LINE.match(l))
-    return outside_code(md, lambda s: TAGS.sub("", s))
-
-
 def md_source(part, blocks):
     used = {k: blocks[k] for k in chip_keys(part) if k in blocks}
-    return {"as": "markdown", "from": {"kind": "inline", "content": server_md(part)}, **({"blocks": used} if used else {})}
+    return {"as": "markdown", "from": {"kind": "inline", "content": server_md(part)},
+            **({"blocks": used} if used else {})}
 
 
 def chunks(md):
     """Split markdown between top-level blocks into parts under CAP bytes: [(text, cont)].
     A table larger than CAP is split by rows; cont=True marks rows to append to the table before it."""
-    blocks = re.split(r"\n\n(?=\S)", md.strip("\n"))
+    blocks = split_blocks(md)  # between blocks only: never inside fenced code
     parts, cur = [], ""
 
     def add(b):

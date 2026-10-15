@@ -292,5 +292,6 @@ class CodeWithBackticks(unittest.TestCase):
         md = m.to_markdown(xml)[0]
         self.assertEqual(md, "a `` `x` `` b ```p``q```\n")
 
+
 if __name__ == "__main__":
     unittest.main()

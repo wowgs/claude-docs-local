@@ -5,13 +5,13 @@ chips and diagram code (<tab>.blocks.json, <tab>.widget-<id>.jsx) and .docsync-s
 .docsync-last.json and .docsync-lock at the root.
 3.0: docsync.json schema 2 with each tab's path (manifest.py); the chips and diagram code in .docsync/<doc key>/; the
 state in .docsync/state.json, the background push in .docsync/push.json. The old state files go to the trash."""
-import json, os
+import os
 
 from . import output as out
-from .files import (PUSH, STATE, SVC, TRASH, base, blocks_path, ensure_gitignore, new_widget_path, posix, slug,
-                    to_trash, widget_path)
-from .manifest import SCHEMA, save, unique
-from .textio import load_json, write
+from .files import (blocks_path, ensure_gitignore, new_widget_path, posix, PUSH, slug, STATE, SVC, to_trash, TRASH,
+                    widget_path)
+from .manifest import MERGE, save, SCHEMA, unique
+from .textio import load_json, save_json
 
 KEEP = ("name", "node", "rev", "hash", "h1", "dhash", "conflict_rev")
 
@@ -45,11 +45,11 @@ def project(path):
         docs[key] = {"id": doc_id, **({"name": name} if name else {}), "dir": posix(d), "tabs": tabs}
         st["docs"][key] = sd
     os.makedirs(SVC, exist_ok=True)
-    write(STATE, json.dumps(st, ensure_ascii=False, indent=1))
+    save_json(STATE, st)
     if os.path.exists(".docsync-last.json"):
         os.replace(".docsync-last.json", PUSH)
     save({"schema": SCHEMA, **({"name": cfg["name"]} if cfg.get("name") else {}),
-          "conflicts": cfg.get("conflicts", "merge"), "docs": docs}, path)
+          "conflicts": cfg.get("conflicts", MERGE), "docs": docs}, path)
     for p in olds + [".docsync-lock"]:
         to_trash(p)
     ensure_gitignore()
@@ -68,7 +68,8 @@ def move_own_files(d, key):
         elif ".widget-" in f and f.endswith(".jsx"):
             b, rest = f.split(".widget-", 1)
             wid = rest[:-4]
-            dst = new_widget_path(key, b + ".md", wid[4:]) if wid.startswith("new-") else widget_path(key, b + ".md", wid)
+            dst = new_widget_path(key, b + ".md", wid[4:]) if wid.startswith("new-") else \
+                widget_path(key, b + ".md", wid)
         else:
             continue
         os.makedirs(os.path.dirname(dst), exist_ok=True)

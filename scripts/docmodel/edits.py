@@ -11,11 +11,11 @@ changed, inserts and deletes whole blocks, items and rows, and replaces a whole 
 Every op may detach comments (allowDetach): by design a push may lose a comment whose words it removes."""
 import difflib, json, re
 
-from .blocks import (ITEM, aligns_of, head_and_rest, item_body, items_of, kind_of, list_kind, plain, rows_of, simple,
-                     split_blocks)
 from . import inline
+from .blocks import (aligns_of, head_and_rest, ITEM, item_body, items_of, kind_of, list_kind, plain, rows_of, simple,
+                     split_blocks)
 from .compare import compare_lines
-from .markdown import Md, aligns, blocks_of, split_attrs, table_attrs, table_grid
+from .markdown import aligns, blocks_of, Md, split_attrs, table_attrs, table_grid
 from .tree import elements, parse
 from .write import CAP, md_source
 
@@ -178,10 +178,7 @@ class Plan:
                 if (0, c) in anchors:
                     self.sets.append(set_op(anchors[(0, c)], {"header": new.get("header", True)}))
         widths = (new.get("widths") or []) + [None] * ncols
-        sep = text.split("\n")[1].strip().strip("|").split("|") if "\n" in text else []
-        column = [ALIGNED.get((":-" if x.strip().startswith(":") else "--") +
-                              (":" if x.strip().endswith(":") and len(x.strip()) > 1 else "-")) for x in sep]
-        column += [None] * ncols
+        column = [ALIGNED.get(a) for a in (aligns_of(text) if "\n" in text else [])] + [None] * ncols
         cell_align = new.get("align", {})
         for (r, c), cell in anchors.items():
             cs = int(cell["attrs"].get("colspan", 1))
@@ -192,9 +189,9 @@ class Plan:
                 have = None
             if (want if any(want) else None) != (have if have and any(have) else None):
                 self.sets.append(set_op(cell, {"colwidth": want if any(want) else None}))
-            align = cell_align.get(f"{r},{c}", column[c])
-            if align != cell["attrs"].get("align"):
-                self.sets.append(set_op(cell, {"align": align}))
+            want_align = cell_align.get(f"{r},{c}", column[c])
+            if want_align != cell["attrs"].get("align"):
+                self.sets.append(set_op(cell, {"align": want_align}))
 
     def block(self, el, text):
         kind = kind_of_el(el)
@@ -238,7 +235,8 @@ class Plan:
             subs = blocks_of(old[i])
             head, rest = head_and_rest(lines)
             if (not subs or subs[0]["tag"] != "paragraph" or any(ITEM.match(l.strip()) for l in head[1:])
-                    or key("\n".join(rest), self.chips) != key("\n".join(self.md.item(old[i], "- ")[1:]), self.md.blocks)):
+                    or key("\n".join(rest), self.chips)
+                    != key("\n".join(self.md.item(old[i], "- ")[1:]), self.md.blocks)):
                 return False
             replaces.append((subs[0], item_body(head)))
         self.sets += sets

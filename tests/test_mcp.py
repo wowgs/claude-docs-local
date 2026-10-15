@@ -41,7 +41,7 @@ class Token(unittest.TestCase):
     def test_a_login_still_ended_after_the_refresh_asks_for_login(self):
         with mock.patch.object(mcp, "stored_login", return_value=login("old", -10)), \
                 mock.patch.object(mcp, "refresh_login"):
-            with self.assertRaises(SystemExit) as e:
+            with self.assertRaises(mcp.RunError) as e:
                 mcp.token()
             self.assertIn("/login", str(e.exception))
 
@@ -103,7 +103,7 @@ class Http(unittest.TestCase):
         logins = [login("old", 60), login("old", 60), login("new", 480)]
         with mock.patch.object(mcp, "stored_login", side_effect=logins), mock.patch.object(mcp, "refresh_login"), \
                 mock.patch.object(mcp.urllib.request, "urlopen", side_effect=lambda req, timeout: (_ for _ in ()).throw(self.refused())):
-            with self.assertRaises(SystemExit) as e:
+            with self.assertRaises(mcp.RunError) as e:
                 mcp.http("https://x")
             self.assertIn("HTTP 401", str(e.exception))
 

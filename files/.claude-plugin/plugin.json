@@ -1,6 +1,6 @@
 {
   "name": "docs-local-files",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "In a project with local docs: Claude edits the docs as local files. Enabled per project by /docs-local.",
   "author": {
     "name": "wowgs"

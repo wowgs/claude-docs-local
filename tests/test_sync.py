@@ -279,8 +279,8 @@ class Sync(Base):
         self.fake.edit("t1", "# 1 Intro\n\nEMBED node/w7")
         self.run_sync()
         textio.write(".docsync/d/1-intro.widget-w7.jsx", "BROKEN")
-        with self.assertRaises(SystemExit):
-            self.run_sync()
+        self.assertEqual(self.run_sync(), [("warn", "1-intro.md")])
+        self.assertIn("did not take this code", output.EVENTS[-1]["detail"])
         self.assertEqual(self.fake.widgets["w7"]["code"], "old")
 
     def test_a_diagram_the_doc_refuses_stops_the_push(self):
@@ -288,8 +288,8 @@ class Sync(Base):
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\n<?claude block d1?>\n")
         textio.write(".docsync/d/1-intro.blocks.json", '{"d1": {"type": "embed", "ref": "node/new-x"}}')
         textio.write(".docsync/d/1-intro.widget-new-x.jsx", "BROKEN")
-        with self.assertRaises(SystemExit):
-            self.run_sync()
+        self.assertEqual(self.run_sync(), [("warn", "1-intro.md")])
+        self.assertIn("did not publish this diagram", output.EVENTS[-1]["detail"])
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello\n")
 
     def test_a_new_tab_with_its_own_new_diagram(self):
@@ -307,8 +307,8 @@ class Sync(Base):
         self.run_sync()
         textio.write("docs/d/2-more.md", "# 2 More\n\n<?claude block d1?>\n")
         textio.write(".docsync/d/2-more.blocks.json", '{"d1": {"type": "embed", "ref": "node/w9"}}')
-        with self.assertRaises(SystemExit):
-            self.run_sync()
+        self.assertEqual(self.run_sync(), [("warn", "2-more.md")])
+        self.assertIn("cannot show a diagram of another tab", output.EVENTS[-1]["detail"])
 
     def test_a_cell_with_several_paragraphs_holds_back_only_its_tab(self):
         self.fake.add_tab("t2", "2 More", "# 2 More\n\nthere")
@@ -344,9 +344,6 @@ class Sync(Base):
         self.assertIn("local edits, doc changed", output.EVENTS[-1]["detail"])
         self.assertTrue(all(tool == "read" for tool, _ in self.fake.calls[calls:]))
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class StopHook(Base):
@@ -396,7 +393,9 @@ class StopHook(Base):
         first = self.stop()
         self.assertEqual(first["decision"], "block")
         self.assertIn("1-intro", first["reason"])
-        self.assertIn("read the doc's version", first["reason"])
+        self.assertIn("merge the doc's version", first["reason"])
+        self.assertIn(".docsync/d/1-intro.from-doc.md", first["reason"])
+        self.assertEqual(textio.read(".docsync/d/1-intro.from-doc.md"), "# 1 Intro\n\nedited there\n")
         self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nedited here and there\n")  # Claude merges
         self.assertIsNone(self.stop(stop_hook_active=True))
         self.assertIn("edited here and there", self.fake.tabs["t1"]["xml"])
@@ -447,7 +446,7 @@ class StopHook(Base):
         saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: started.append((a, k))
         try:
             self.assertIsNone(self.stop())  # after every turn, so that the doc's own changes come down too
-            self.assertEqual(started[0][0][0][-1], "push-background")
+            self.assertEqual(started[0][0][0][-1], "sync-background")
             self.write("proj/.docsync/push.json", json.dumps({"rc": 1, "problems": ["boom"]}))
             self.assertIn("boom", self.stop()["systemMessage"])
             self.assertIsNone(self.stop())  # shown once
@@ -480,7 +479,7 @@ class StopHook(Base):
         mcp.call = lambda tool, args, soft=False: (
             {"verdict": "deny", "reason": "anchors_affected", "data": {"asking": [{"id": "th-1"}]}}
             if tool == "update" else call(tool, args, soft))
-        saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: self.hooks.push_background(None)
+        saved, subprocess.Popen = subprocess.Popen, lambda *a, **k: self.hooks.sync_background(None)
         try:
             self.write("proj/docs/d/1-intro.md", "# 1 Intro\n\nbye\n")
             self.assertIsNone(self.stop())  # the Stop hook starts the push (here: runs it at once)
@@ -509,7 +508,7 @@ class StopHook(Base):
         saved = self.hooks.sync_now
         self.hooks.sync_now = lambda root, force=False: 1 / 0
         try:
-            self.hooks.push_background(None)
+            self.hooks.sync_background(None)
         finally:
             self.hooks.sync_now = saved
         last = json.load(open(os.path.join(self.root, ".docsync/push.json"), encoding="utf-8"))
@@ -539,3 +538,32 @@ class NothingLost(Base):
         self.assertEqual(self.local(), "# 1 Intro\n\ntheirs\n")
         self.assertEqual(textio.read(os.path.join(files.TRASH, "docs/d/1-intro.md")), "# 1 Intro\n\nmine\n")
         self.assertIn("local edits kept in", output.EVENTS[-1]["detail"])
+
+
+class Decide(unittest.TestCase):
+    """sync.decide: the whole table of what a sync does with a tab known on both sides."""
+
+    def test_the_table(self):
+        d = sync.decide
+        #       mode      loc    rem    force  wins   merged renamed  -> action
+        rows = [("status", True, True, False, False, False, False, "status"),
+                ("sync", False, False, False, False, False, False, "refresh"),
+                ("sync", True, False, False, False, False, False, "push"),
+                ("sync", False, True, False, False, False, False, "pull"),
+                ("sync", True, True, False, False, False, False, "conflict"),
+                ("sync", True, True, False, False, True, False, "push"),
+                ("sync", True, True, False, True, False, False, "merge-push"),
+                ("sync", False, False, False, False, False, True, "pull"),
+                ("push", True, True, False, False, False, False, "conflict"),
+                ("push", True, True, True, True, False, False, "push"),
+                ("push", False, True, False, False, False, False, "refresh"),
+                ("pull", True, False, False, False, False, False, "skip"),
+                ("pull", True, False, True, True, False, False, "pull"),
+                ("pull", True, True, False, False, True, False, "conflict"),
+                ("pull", False, True, False, False, False, False, "pull")]
+        for *args, want in rows:
+            self.assertEqual(d(*args), want, args)
+
+
+if __name__ == "__main__":
+    unittest.main()

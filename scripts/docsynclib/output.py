@@ -1,4 +1,4 @@
-"""What docsync prints: live lines in a terminal, result lines, the JSON events of mode model."""
+"""What docsync prints: live lines in a terminal, result lines, and with --json the events as one JSON document."""
 import re, shutil, sys
 
 TTY = sys.stdout.isatty()
@@ -19,11 +19,6 @@ STYLE = {  # kind: (icon, verb, ANSI color)
     "skip": ("·", "skipped", "33"), "warn": ("!", "warning", "33"), "info": ("•", "", "34"), "insync": ("✓", "", "2"),
 }
 COUNTED = ("pushed", "pulled", "created", "deleted", "renamed", "conflict", "warn")
-
-
-def warn(msg):
-    """Warnings go to stderr, so they never mix with the result."""
-    sys.stderr.write(("\x1b[33m" + msg + "\x1b[0m" if sys.stderr.isatty() else msg) + "\n")
 
 
 def status(action, tab=None):
@@ -87,7 +82,7 @@ def redraw():
     BLOCK["shown"] = len(lines)
 
 
-def say(*a, kind=None):
+def say(*a):
     """A permanent line; clears the live line first."""
     global _live
     if JSON:
@@ -99,8 +94,6 @@ def say(*a, kind=None):
     if _live:
         sys.stdout.write("\r\x1b[2K")
         _live = False
-    if kind:
-        STATS[kind] = STATS.get(kind, 0) + 1
     print(*a, flush=True)
 
 
@@ -173,7 +166,8 @@ def ev(kind, path, detail="", **more):
             doc_header()
         DOC["events"] += 1
         indent = "      "
-        path = path[len(DOC["dir"]) + 1:] if path.startswith(DOC["dir"] + "/") else ("(the doc)" if path == DOC["dir"] else path)
+        path = path[len(DOC["dir"]) + 1:] if path.startswith(DOC["dir"] + "/") else \
+            ("(the doc)" if path == DOC["dir"] else path)
     say(f"{indent}{paint(icon, color)} {paint(f'{verb:<9}', color)}{path:<36} {paint(detail, '2')}".rstrip())
 
 

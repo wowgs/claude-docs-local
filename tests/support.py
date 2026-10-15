@@ -101,6 +101,10 @@ class FakeDocs:
         ids = [i if not i.startswith(".") else "p" + i for i in ids]
 
         def made(source, keep=None):
+            if source.get("as") == "blocks":  # block content: paragraphs as their plain text (marks are lost here)
+                text = "\n\n".join("".join(n.get("text", "") for n in b.get("content", []))
+                                    for b in source["from"]["content"] if b.get("type") == "paragraph")
+                source = {"as": "markdown", "from": {"kind": "inline", "content": text}, "blocks": {}}
             def chip(m):
                 spec = source["blocks"][m.group(1)]
                 return f"@@[{spec['ref']}|{spec.get('label', '')}]" if spec["type"] == "mention" else "EMBED " + spec["ref"]
@@ -122,6 +126,8 @@ class FakeDocs:
         elif op["op"] == "delete":
             for k in sorted(at, reverse=True):
                 del els[k]
+        elif op["op"] == "set":  # attributes: not modelled
+            pass
         else:
             raise AssertionError(f"unexpected op {op}")
         t["xml"] = "<doc>" + "".join(els) + "</doc>"
@@ -185,7 +191,7 @@ class FakeDocs:
                     self.name = p["value"]
             return {"verdict": "allow"}
         if tool == "delete":
-            self.tabs.pop(ref["id"])
+            self.tabs.pop(ref["id"], None)
             return {"verdict": "allow"}
         if tool == "read" and ref.get("object") == "node" and ref["id"] in self.widgets:
             return {"verdict": "allow", "value": self.widgets[ref["id"]]}

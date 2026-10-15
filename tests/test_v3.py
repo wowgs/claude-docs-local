@@ -2,6 +2,7 @@
 tabs, diagram pictures, links between tab files, a manifest that came with git, the import of markdown files."""
 import json, os, types, unittest
 
+import support
 from support import FakeDocs, Sandbox
 from docsynclib import files, hooks, importer, manifest, mcp, output, projects, sync, textio
 
@@ -262,9 +263,6 @@ class Outputs(Project):
         self.assertIn('"open"', answer["reason"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class Commands(Project):
     def test_tab_add_and_parent_write_the_manifest(self):
@@ -283,3 +281,284 @@ class Commands(Project):
             cli.main(["tab", "parent", "docs/d/2-child.md"])
         self.assertEqual(self.run_sync(), [("pushed", "2-child.md")])
         self.assertIsNone(self.fake.tabs[new]["parent"])
+
+
+class DocGone(Project):
+    """Only the doc's own answer for a deleted or unshared doc removes it here; any other refusal is an error."""
+
+    def setUp(self):
+        super().setUp()
+        self.run_sync()
+        self.saved_call = mcp.call
+
+    def tearDown(self):
+        mcp.call = self.saved_call
+        super().tearDown()
+
+    def refuse(self, answer):
+        mcp.call = lambda tool, args, soft=False: answer if (tool == "read" and args["ref"]["object"] == "project") \
+            else self.fake.call(tool, args, soft)
+
+    def test_a_deleted_doc_leaves_the_manifest(self):
+        self.refuse({"verdict": "deny", "reason": "access"})
+        self.assertEqual(self.run_sync(), [("deleted", "docs/d")])
+        self.assertEqual(self.cfg()["docs"], {})
+        self.assertFalse(os.path.exists("docs/d/1-intro.md"))
+
+    def test_any_other_refusal_changes_nothing(self):
+        for answer in ({"verdict": "?", "raw": "Error: something"}, {"verdict": "deny", "reason": "rate_limited"}):
+            self.refuse(answer)
+            self.assertEqual(self.run_sync(), [("warn", "docs/d")])
+            self.assertIn("could not be read", output.EVENTS[-1]["detail"])
+            self.assertIn("d", self.cfg()["docs"])
+            self.assertTrue(os.path.exists("docs/d/1-intro.md"))
+
+
+class HookExit(unittest.TestCase):
+    def test_the_hook_exits_0_even_after_a_conflict(self):
+        import subprocess, sys
+        code = ("import sys, json; sys.path.insert(0, %r)\n"
+                "from docsynclib import cli, hooks, output as out\n"
+                "hooks.stop_hook = lambda e: (out.ev('conflict', 'x.md', 'changed locally and in the doc'), "
+                "{'decision': 'block', 'reason': 'merge'})[1]\n"
+                "cli.main(['hook'])\n") % support.SCRIPTS
+        r = subprocess.run([sys.executable, "-c", code], input='{"hook_event_name": "Stop"}', capture_output=True,
+                           text=True)
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(json.loads(r.stdout.strip().splitlines()[-1])["decision"], "block")
+
+
+class Conflicts(Project):
+    def setUp(self):
+        super().setUp()
+        self.run_sync()
+
+    def both(self):
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhere\n")
+        self.fake.edit("t1", "# 1 Intro\n\nthere")
+
+    def test_a_conflict_stays_until_the_file_is_merged(self):
+        self.both()
+        self.assertEqual(self.run_sync(), [("conflict", "1-intro.md")])
+        self.assertEqual(textio.read(".docsync/d/1-intro.from-doc.md"), "# 1 Intro\n\nthere\n")
+        self.assertEqual(self.run_sync(), [("conflict", "1-intro.md")])  # nobody merged: nothing is sent
+        self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nthere\n")
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhere and there\n")
+        self.assertEqual(self.run_sync(), [("pushed", "1-intro.md")])
+        self.assertFalse(os.path.exists(".docsync/d/1-intro.from-doc.md"))
+
+    def test_the_projects_local_policy_merges_without_force(self):
+        cfg = self.cfg()
+        cfg["conflicts"] = "local"
+        textio.write("docsync.json", json.dumps(cfg))
+        self.fake.edit("t1", "# 1 Intro\n\nhello\n\nweb")
+        self.run_sync()
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhello local\n\nweb\n")
+        self.fake.edit("t1", "# 1 Intro\n\nhello\n\nweb, again")
+        self.run_sync()
+        self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello local\n\nweb, again\n")
+
+    def test_a_new_machine_with_the_local_policy_does_not_push_over_the_doc(self):
+        cfg = self.cfg()
+        cfg["conflicts"] = "local"
+        textio.write("docsync.json", json.dumps(cfg))
+        os.remove(files.STATE)
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nold from git\n")
+        self.fake.edit("t1", "# 1 Intro\n\nnewer in the doc")
+        self.assertEqual(self.run_sync(), [("conflict", "1-intro.md")])
+        self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nnewer in the doc\n")
+
+
+class StopHookConflicts(Project):
+    def setUp(self):
+        super().setUp()
+        self.run_sync()
+        projects.register(".")
+        projects.set_mode(".", "turn")
+
+    def test_after_its_try_claude_is_not_blocked_again_for_the_same_conflict(self):
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhere\n")
+        self.fake.edit("t1", "# 1 Intro\n\nthere")
+        self.assertEqual(hooks.stop_hook({"cwd": os.getcwd()})["decision"], "block")
+        answer = hooks.stop_hook({"cwd": os.getcwd(), "stop_hook_active": True})
+        self.assertNotIn("decision", answer)
+        self.assertIn("1-intro.md", answer["systemMessage"])
+
+    def test_a_conflict_only_the_user_can_decide_is_shown_to_the_user_once(self):
+        os.remove("docs/d/1-intro.md")
+        self.fake.edit("t1", "# 1 Intro\n\nchanged")
+        first = hooks.stop_hook({"cwd": os.getcwd()})
+        self.assertNotIn("decision", first)
+        self.assertIn("deleted locally, changed in the doc", first["systemMessage"])
+        self.assertIsNone(hooks.stop_hook({"cwd": os.getcwd()}))
+
+
+class Paths(Project):
+    def setUp(self):
+        super().setUp()
+        self.fake.add_tab("t2", "3 Notes", "# 3 Notes\n\nthird")
+        self.run_sync()
+
+    def test_a_rename_in_the_doc_does_not_take_the_file_of_another_tab(self):
+        self.fake.add_tab("t3", "1 Notes", "# 1 Notes\n\nfirst", order="0")  # before t2 in the doc
+        self.run_sync()
+        os.remove("docs/d/3-notes.md")  # the user deletes tab t2 here
+        self.fake.tabs["t3"]["name"] = "3 Notes"  # and in the doc, tab t3 gets t2's old name
+        self.run_sync()
+        files_ = {t["id"]: t["file"] for t in self.cfg()["docs"]["d"]["tabs"]}
+        self.assertEqual(files_["t3"], "docs/d/1-notes.md")
+        self.assertNotIn("t2", self.fake.tabs)
+        self.assertIn("first", self.fake.tabs["t3"]["xml"])
+
+    def test_two_tab_files_of_one_name_stop_their_doc(self):
+        textio.write("README.md", "# x\n")
+        cfg = self.cfg()
+        cfg["docs"]["d"]["tabs"].append({"id": None, "file": "README.md"})
+        cfg["docs"]["d"]["tabs"][0]["file"] = "docs/d/readme.md"
+        os.rename("docs/d/1-intro.md", "docs/d/readme.md")
+        textio.write("docsync.json", json.dumps(cfg))
+        self.assertEqual(self.run_sync(), [("warn", "docs/d")])
+        self.assertIn("same name", output.EVENTS[-1]["detail"])
+
+    def test_a_hand_rename_of_a_file_with_chips_keeps_its_tab(self):
+        os.makedirs(".docsync/d", exist_ok=True)
+        textio.write("docs/d/3-notes.md", "# 3 Notes\n\nsee <?claude block c1?>\n")
+        textio.write(".docsync/d/3-notes.blocks.json", '{"c1": {"type": "embed", "ref": "node/w1"}}')
+        self.run_sync()
+        os.rename("docs/d/3-notes.md", "docs/d/3-other-words.md")
+        self.run_sync()
+        self.assertIn("t2", self.fake.tabs)
+        self.assertEqual(self.cfg()["docs"]["d"]["tabs"][1]["file"], "docs/d/3-other-words.md")
+
+
+class ImportCheck(Project):
+    def test_code_is_not_a_loss(self):
+        textio.write("a.md", "# A\n\nuse `__init__`, `List<int>` and `\\(a\\)`\n\n```\n+ added\n---\n<div>\n```\n")
+        self.assertEqual(importer.check("a.md"), [])
+
+    def test_each_loss_is_found(self):
+        cases = {"---\nx: 1\n---\n# A\n": "frontmatter", "a <div>b</div>\n": "HTML", "a[^1]\n": "footnotes",
+                 "[a]: http://x\n": "reference-style links", "![p](pic.png)\n": "images from files",
+                 "Title\n=====\n": "setext headings", "an _emphasis_ here\n": "_emphasis_",
+                 "+ item\n": "+ or * bullets", "$$x$$\n": "math"}
+        for text, what in cases.items():
+            textio.write("a.md", text)
+            self.assertTrue(any(l.startswith(what) for l in importer.check("a.md")), (text, importer.check("a.md")))
+
+
+class Inline(unittest.TestCase):
+    def test_marks_links_code_chips_breaks_and_escapes(self):
+        from docmodel import inline
+        chips = {"k": {"type": "mention", "ref": "file/t1", "label": "T"}, "d": {"type": "date", "value": "2026-01-01"},
+                 "me": {"type": "mention", "user": "me"}}
+        got = inline.paragraph("a **b** *i* ~~s~~ <u>u</u> <mark>m</mark> `c<u>` [l](http://x) \\* "
+                               "<?claude block k?> <?claude block d?> <?claude block me?>\\\nz", chips)["content"]
+        marks = {n["text"]: [m["type"] for m in n.get("marks", [])] for n in got if n["type"] == "text"}
+        self.assertEqual((marks["b"], marks["i"], marks["s"], marks["u"], marks["m"], marks["c<u>"], marks["l"]),
+                         (["bold"], ["italic"], ["strike"], ["underline"], ["highlight"], ["code"], ["link"]))
+        self.assertIn(" * ", "".join(n.get("text", "") for n in got))
+        self.assertEqual([n["type"] for n in got if n["type"] != "text"], ["mention", "date", "mention", "hardBreak"])
+
+    def test_an_image_is_not_written_as_block_content(self):
+        from docmodel import inline
+        with self.assertRaises(inline.NotInline):
+            inline.paragraph("see ![p](blob/1)", {})
+
+
+class Cli(Project):
+    def test_sync_json_and_exit_codes(self):
+        from docsynclib import cli
+        projects.register(".")
+        def run(*a):
+            output.EVENTS.clear(); output.STATS.clear(); output.CONFLICTS = 0; cli.RESULT.clear()
+            try:
+                cli.main(["sync", "--json", *a])
+            except SystemExit as e:
+                return e.code
+        self.assertEqual(run(), 0)
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhere\n")
+        self.fake.edit("t1", "# 1 Intro\n\nthere")
+        self.assertEqual(run(), 2)
+        self.assertEqual(cli.RESULT[-1]["conflict"], 1)
+
+
+class LargeTab(Project):
+    def test_a_new_tab_larger_than_one_write_goes_in_parts(self):
+        from docmodel import edits, write
+        saved = write.CAP, edits.CAP
+        write.CAP = edits.CAP = 300
+        try:
+            self.run_sync()
+            text = "# 2 Big\n\n" + "\n\n".join(f"paragraph number {n} with some words" for n in range(30)) + "\n"
+            textio.write("docs/d/2-big.md", text)
+            self.assertEqual(self.run_sync(), [("created", "2-big.md")])
+            new = next(k for k, t in self.fake.tabs.items() if t["name"] == "2 Big")
+            self.assertEqual(self.fake.text(new), text)
+            self.assertIn("verified", output.EVENTS[-1]["detail"])
+        finally:
+            write.CAP, edits.CAP = saved
+
+
+class NestingLater(Project):
+    def test_a_tab_moved_under_another_in_the_doc_moves_in_the_manifest(self):
+        self.fake.add_tab("t2", "2 More", "# 2 More\n\nb")
+        self.run_sync()
+        self.fake.tabs["t2"]["parent"] = "t1"
+        self.run_sync()
+        self.assertEqual({t["id"]: t.get("parent") for t in self.cfg()["docs"]["d"]["tabs"]}, {"t1": None, "t2": "t1"})
+
+
+class HookDetails(Project):
+    def setUp(self):
+        super().setUp()
+        self.run_sync()
+        projects.register(".")
+        projects.set_mode(".", "turn")
+        cfg = self.cfg()
+        cfg["conflicts"] = "local"
+        textio.write("docsync.json", json.dumps(cfg))
+
+    def test_claude_is_not_woken_twice_for_the_same_problems(self):
+        marker = {"rc": 1, "problems": ["x"], "started": __import__("time").time(), "woken": ["x"]}
+        os.makedirs(".docsync", exist_ok=True)
+        textio.write(".docsync/push.json", json.dumps(marker))
+        saved = hooks.GRACE_S
+        hooks.GRACE_S = 0.05
+        try:
+            self.assertEqual(hooks.stop_wake({"cwd": os.getcwd()}), (0, ""))
+        finally:
+            hooks.GRACE_S = saved
+
+    def test_a_stop_during_a_background_sync_runs_it_once_more(self):
+        calls = []
+        def fake_sync(root, force=False):
+            calls.append(1)
+            if len(calls) == 1:  # a Stop came while this one ran
+                m = textio.load_json(".docsync/push.json")
+                m["again"] = True
+                textio.write(".docsync/push.json", json.dumps(m))
+            return 0, [], []
+        saved = hooks.sync_now
+        hooks.sync_now = fake_sync
+        try:
+            textio.write(".docsync/push.json", json.dumps({"running": True, "started": 1}))
+            hooks.sync_background(None)
+        finally:
+            hooks.sync_now = saved
+        self.assertEqual(len(calls), 2)
+        self.assertNotIn("running", textio.load_json(".docsync/push.json"))
+
+
+class Guard(Project):
+    def test_a_doc_kept_as_files_is_guarded_from_a_session_outside_its_project(self):
+        from docsynclib import claude
+        projects.register(".")
+        call = {"tool_name": "mcp__claude_ai_Claude_Docs__update", "cwd": self.tmp,
+                "tool_input": {"container": {"kind": "project", "id": "D1"}}}
+        self.assertIsNotNone(claude.decide(call))
+        call["tool_input"]["container"]["id"] = "other-doc"
+        self.assertIsNone(claude.decide(call))
+
+
+if __name__ == "__main__":
+    unittest.main()

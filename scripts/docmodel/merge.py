@@ -8,7 +8,8 @@ import difflib
 
 from .blocks import split_blocks
 from .compare import compare_lines
-from .markdown import chip_keys, sub_chips
+from .edits import align
+from .markdown import chip_keys, chip_text, sub_chips
 
 
 def keyed(md, chips):
@@ -26,9 +27,49 @@ def matches(a, b):
     return m
 
 
+def fates(base_k, side_k):
+    """What one side did with each base block of a region: {base index: side index, or None when it deleted it},
+    and {base index the inserts come before (len(base_k) for the end): [side indexes inserted there]}. A changed block
+    is paired with its base block by similarity, as the edit planner pairs them (edits.align)."""
+    owner, inserts, nxt = {}, {}, 0
+    for i, j, _ in align(base_k, side_k, ["b"] * len(base_k), ["b"] * len(side_k)):
+        if i is None:
+            inserts.setdefault(nxt, []).append(j)
+        else:
+            owner[i] = j
+            nxt = i + 1
+    return owner, inserts
+
+
+def region(base_k, local_k, local_b, doc_k, doc_b):
+    """The blocks of one region between unchanged blocks, as [(side, text)]. Changed on one side only: that side.
+    Changed on both: block by block. A block changed or deleted here stays as it is here; one only the doc changed or
+    deleted follows the doc; what either side inserted is kept, the local inserts first."""
+    if local_k == base_k:
+        return [("doc", b) for b in doc_b]
+    if doc_k == base_k:
+        return [("local", b) for b in local_b]
+    l_own, l_ins = fates(base_k, local_k)
+    d_own, d_ins = fates(base_k, doc_k)
+    out = []
+    for i in range(len(base_k) + 1):
+        out += [("local", local_b[j]) for j in l_ins.get(i, [])]
+        out += [("doc", doc_b[j]) for j in d_ins.get(i, []) if doc_k[j] not in local_k]
+        if i == len(base_k):
+            break
+        lj, dj = l_own.get(i), d_own.get(i)
+        if lj is None:  # deleted here
+            continue
+        if local_k[lj] != base_k[i]:
+            out.append(("local", local_b[lj]))  # changed here: the local file wins
+        elif dj is not None:
+            out.append(("doc", doc_b[dj]))  # unchanged here: the doc's version (changed there or not)
+        # unchanged here and deleted in the doc: deleted
+    return out
+
+
 def merge(base, local, doc):
-    """(markdown, chips) of the merge. Regions between blocks that all three keep the same are taken whole: from the
-    doc when only the doc changed them, else from the local version."""
+    """(markdown, chips) of the merge, region by region between the blocks that all three keep the same (region)."""
     base_b, base_k = keyed(*base)
     local_b, local_k = keyed(*local)
     doc_b, doc_k = keyed(*doc)
@@ -37,10 +78,7 @@ def merge(base, local, doc):
     taken, bi, li, di = [], 0, 0, 0
     for i in anchors + [None]:
         be, le, de = (len(base_k), len(local_k), len(doc_k)) if i is None else (i, in_local[i], in_doc[i])
-        if local_k[li:le] == base_k[bi:be]:  # only the doc changed this region (or nobody)
-            taken += [("doc", b) for b in doc_b[di:de]]
-        else:  # only here, or both: the local file wins
-            taken += [("local", b) for b in local_b[li:le]]
+        taken += region(base_k[bi:be], local_k[li:le], local_b[li:le], doc_k[di:de], doc_b[di:de])
         if i is None:
             break
         taken.append(("local", local_b[le]))
@@ -57,7 +95,7 @@ def merge(base, local, doc):
                 while f"m{n}" in chips:
                     n += 1
                 chips[f"m{n}"] = spec
-                return f"<?claude block m{n}?>"
+                return chip_text(f"m{n}")
             text = sub_chips(text, renamed)
         out.append(text)
     md = "\n\n".join(out) + "\n"

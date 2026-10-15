@@ -2,6 +2,7 @@ import http.client, json, os, shutil, tempfile, threading, time, unittest
 from unittest import mock
 
 import support  # noqa: F401
+from docsynclib.errors import RunError
 from docsynclib import bridge, mcp
 
 
@@ -59,8 +60,8 @@ class Running(unittest.TestCase):
     def test_a_call_that_may_have_run_is_never_sent_again(self):
         self.answer = lambda job: {"error": "connection reset"}
         self.module()
-        with self.assertRaises(SystemExit) as e:
-            bridge.call("update", {})
+        with self.assertRaises(RunError) as e:
+            bridge.call("update", {"ref": {"object": "node", "id": "n1"}})
         self.assertIn("connection reset", str(e.exception))
 
     def test_no_module_asking_for_work_means_no_bridge(self):
@@ -90,9 +91,6 @@ class Absent(unittest.TestCase):
             self.assertIsNone(bridge.call("read", {}))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class LargeResults(unittest.TestCase):
     """Claude Code gives a module a result over about 64,000 characters as an error text naming a saved copy."""
@@ -108,7 +106,26 @@ class LargeResults(unittest.TestCase):
         self.assertEqual(bridge.whole(note(f.name), "read"), {"content": content})
         os.remove(f.name)
         self.assertIsNone(bridge.whole(note(f.name), "read"))
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(RunError):
             bridge.whole(note(f.name), "update")
         small = {"content": [{"type": "text", "text": '{"verdict": "allow"}'}]}
         self.assertIs(bridge.whole(small, "read"), small)
+
+
+class Allowed(unittest.TestCase):
+    def test_only_the_calls_docsync_makes_go_through(self):
+        ok = [("read", {}), ("query", {}), ("create", {}), ("batch", {}),
+              ("delete", {"ref": {"object": "file", "id": "t1"}}),
+              ("update", {"ref": {"object": "node", "id": "n1"}}),
+              ("update", {"ref": {"object": "project", "id": "D"}, "payload": {"kind": "patch", "patch": [
+                  {"op": "set", "path": ["tabs", "t1", "name"], "value": "x"}]}})]
+        no = [("delete", {"ref": {"object": "project", "id": "D"}}),
+              ("update", {"ref": {"object": "project", "id": "D"}, "payload": {"kind": "patch", "patch": [
+                  {"op": "set", "path": ["deleted"], "value": True}]}}),
+              ("guide", {})]
+        self.assertEqual([bridge.allowed(t, a) for t, a in ok], [True] * len(ok))
+        self.assertEqual([bridge.allowed(t, a) for t, a in no], [False] * len(no))
+
+
+if __name__ == "__main__":
+    unittest.main()

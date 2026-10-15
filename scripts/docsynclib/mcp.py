@@ -1,8 +1,9 @@
 """The Claude Docs connector: Claude Code's claude.ai login, the connector's MCP endpoint, tool calls."""
-import base64, hashlib, json, os, platform, shutil, subprocess, sys, tempfile, threading, time, unicodedata, urllib.error
+import base64, hashlib, json, os, platform, shutil, subprocess, tempfile, threading, time, unicodedata, urllib.error
 import urllib.request, uuid
 
 from . import bridge
+from .errors import brief, Refused, RunError
 from .textio import read
 
 SERVER_NAME = "Claude Docs"
@@ -45,12 +46,12 @@ def stored_login():
         where = home_file + (" or the Keychain" if platform.system() == "Darwin" else "")
         if platform.system() == "Windows":
             where += " (a login that Claude Code keeps in Windows Credential Manager is not supported yet)"
-        sys.exit(f"no Claude Code login found in {where}: run `claude` and /login with your claude.ai account")
+        raise RunError(f"no Claude Code login found in {where}: run `claude` and /login with your claude.ai account")
     try:
         login = json.loads(raw)["claudeAiOauth"]
         login["accessToken"]
     except (ValueError, KeyError, TypeError):
-        sys.exit("Claude Code is not logged in with a claude.ai account (needed for the Claude Docs connector)")
+        raise RunError("Claude Code is not logged in with a claude.ai account (needed for the Claude Docs connector)")
     return login
 
 
@@ -106,7 +107,7 @@ def token(stale=None):
             login = stored_login()
             # Claude Code refreshes only a login near its end, by its own margin: one still valid is used.
             if ending(login, 0) or (stale is not None and login["accessToken"] == stale):
-                sys.exit("Claude Code's claude.ai login has ended or was refused, and `claude mcp list` did not "
+                raise RunError("Claude Code's claude.ai login has ended or was refused, and `claude mcp list` did not "
                          "refresh it: run `claude` and /login")
         _tok = login["accessToken"]
         return _tok
@@ -126,7 +127,7 @@ def http(url, body=None, headers=None):
             if e.code == 401 and attempt == 1:
                 token(stale=tok)
                 continue
-            sys.exit(f"HTTP {e.code} {url}: {e.read().decode()[:400]}")
+            raise RunError(f"HTTP {e.code} {url}: {brief(e.read().decode())}")
 
 
 def server_url():
@@ -136,7 +137,7 @@ def server_url():
                       headers={"anthropic-beta": "mcp-servers-2025-12-04", "anthropic-version": "2023-06-01"})
         ids = [s["id"] for s in json.loads(raw)["data"] if s.get("display_name") == SERVER_NAME]
         if not ids:
-            sys.exit("Claude Docs connector not found for this account")
+            raise RunError("Claude Docs connector not found for this account")
         _url = PROXY + ids[0]
     return _url
 
@@ -157,11 +158,12 @@ def call(tool, args, soft=False):
             raw = data[-1]
         r = json.loads(raw)
         if "error" in r:
-            sys.exit(f"{tool}: {r['error']}")
+            raise RunError(f"{tool}: {brief(r['error'])}")
         result = r["result"]
     text = "".join(c.get("text", "") for c in result.get("content", []))
     i = text.find('{"verdict"')
-    out = json.JSONDecoder().raw_decode(text[i:])[0] if i >= 0 else {"verdict": "?", "raw": text}
+    out = json.JSONDecoder().raw_decode(text[i:])[0] if i >= 0 else \
+        {"verdict": "error" if result.get("isError") else "?", "raw": text}  # an error text, or no answer
     images = [c.get("data") or (c.get("source") or {}).get("data") for c in result.get("content", [])
               if c.get("type") == "image"]  # MCP gives {"data"}, the session's bridge {"source": {"data"}}
     if any(images):
@@ -169,8 +171,13 @@ def call(tool, args, soft=False):
     if out.get("verdict") != "allow":
         if soft:
             return out
-        sys.exit(f"{tool} refused: {json.dumps(out, ensure_ascii=False)[:1500]}")
+        raise Refused(f"{tool} refused: {brief(out)}")
     return out
+
+
+def patch_doc(doc_id, *ops):
+    """One patch of a doc's own fields: its name, its tabs' names, order and nesting."""
+    return call("update", {"ref": {"object": "project", "id": doc_id}, "payload": {"kind": "patch", "patch": list(ops)}})
 
 
 def C(doc_id):

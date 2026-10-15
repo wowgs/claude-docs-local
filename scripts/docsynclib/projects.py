@@ -4,13 +4,16 @@
 
 sync: "manual" — the user runs docsync; "turn" — a hook syncs when Claude finishes a turn. What a sync does with a tab
 changed on both sides is the project's "conflicts" in its docsync.json (manifest.py), not a setting of this machine."""
-import json, os, platform
+import os, platform
 
+from . import manifest
 from .manifest import CONFIG
-from .textio import load_json, write
+from .textio import load_json, save_json
 
 SCHEMA = 3  # a change is a breaking update (CHANGELOG.md); docsync moves an older config to it when it reads it
-OLD = {"user": "manual", "model": "turn", "auto": "turn", "auto-force": "turn"}  # modes before 4.0
+MANUAL, TURN = "manual", "turn"  # when this machine syncs: when the user runs docsync, when Claude finishes a turn
+MODES = (MANUAL, TURN)
+OLD = {"user": MANUAL, "model": TURN, "auto": TURN, "auto-force": TURN}  # modes before 4.0
 
 
 def user_config():
@@ -22,7 +25,7 @@ def user_config():
 
 
 def load_user():
-    """The user config, moved to schema 2 when it is older: 2.x keeps the projects as a list, 2.2 and older in
+    """The user config, moved to the current schema when it is older (move_modes for 3.0): 2.x keeps the projects as a list, 2.2 and older in
     projects.json with mode "model"."""
     p = user_config()
     if os.path.exists(p):
@@ -39,7 +42,7 @@ def load_user():
         move_modes(u)
         u["schema"] = SCHEMA
         os.makedirs(os.path.dirname(p), exist_ok=True)
-        write(p, json.dumps(u, ensure_ascii=False, indent=1))
+        save_json(p, u)
     return u
 
 
@@ -55,8 +58,8 @@ def move_modes(u):
             except ValueError:
                 cfg = None
             if cfg is not None and "conflicts" not in cfg:
-                cfg["conflicts"] = "local" if old == "auto-force" else "merge"
-                write(path, json.dumps(cfg, ensure_ascii=False, indent=1) + "\n")
+                cfg["conflicts"] = manifest.LOCAL if old == "auto-force" else manifest.MERGE
+                save_json(path, cfg)
         if entry.get("sync"):
             entry["sync"] = OLD.get(entry["sync"], entry["sync"])
     if u.get("sync"):
@@ -67,7 +70,21 @@ def save_user(u):
     u.setdefault("schema", SCHEMA)
     p = user_config()
     os.makedirs(os.path.dirname(p), exist_ok=True)
-    write(p, json.dumps(u, ensure_ascii=False, indent=1))
+    save_json(p, u)
+
+
+def default_conflicts():
+    """What a new project of this user does with a tab changed on both sides, as setup's answer said."""
+    return load_user().get("conflicts") or manifest.MERGE
+
+
+def project_manifest(root):
+    """The project's docsync.json, or a new one: its name from the folder, conflicts from setup's answer. The working
+    folder is the project root."""
+    if os.path.exists(CONFIG):
+        return manifest.load(CONFIG)
+    return {"schema": manifest.SCHEMA, "name": os.path.basename(root.rstrip(os.sep)) or root,
+            "conflicts": default_conflicts(), "docs": {}}
 
 
 def projects():
@@ -102,7 +119,7 @@ def register(root):
 
 def unregister(root):
     u = load_user()
-    u.get("projects", {}).pop(root, None)
+    u.get("projects", {}).pop(os.path.realpath(root), None)
     save_user(u)
 
 

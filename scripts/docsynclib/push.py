@@ -1,29 +1,34 @@
 """Local files -> the doc: a changed tab piece by piece (or whole), a tab renamed by its heading, new and deleted
 tabs and docs. A comment that asks Claude and has no answer yet can hold a tab back (Blocked)."""
-import difflib, json, os, sys
+import difflib, json, os
 
 from . import mcp, output as out
-from .files import (FMT, TRASH, save_base, base, base_for, blocks_path, local_hash, move_tab_files, own_files, posix,
-                    read_text, slug, svc_dir, to_trash)
+from .errors import brief, LocalError, Refused, RunError
+from .files import (base, FMT, keep_copy, move_tab_files, own_files, posix, read_text, save_base, slug, snapshot,
+                    svc_dir, theirs_blocks_path, theirs_path, to_trash, TRASH)
+from .files import renamed_path
+from .manifest import free_path
 from .mcp import C, find_key
-from .pull import refresh, write_blocks
-from .textio import write
-from .widgets import NEW_WIDGET, create_widgets
+from .project import new_tab_state
+from .pull import refresh
+from .textio import save_json, write
+from .widgets import create_widgets, NEW_WIDGET
 from docmodel import edits
 from docmodel.compare import compare_lines, doc_hash, h1, same
 from docmodel.fileview import from_file
-from docmodel.markdown import to_markdown
+from docmodel.markdown import to_markdown, widget_id
 from docmodel.tree import full_ids, top_ids
 from docmodel.write import check_pushable, chunks, md_source
 
 ARTIFACT = "https://claude.ai/code/artifact/"
+FIRST_ORDER, NEXT_ORDER = "a0", "a1"  # tabs sort by their order strings: the main tab, the first one after it
+AFTER = "m"  # appended to the last order: a string that sorts after it
 
 
-def local_md(P, key, file):
-    """The tab file as the doc's markdown and its chips (fileview.from_file)."""
-    text = read_text(file) or ""
-    blocks = json.loads(read_text(blocks_path(key, file)) or "{}")
-    return from_file(text, blocks, P.view(key, file))
+def local_md(P, key, file, snap=None):
+    """The tab file as the doc's markdown and its chips (fileview.from_file), from a snapshot or as it is now."""
+    text, raw, _ = snap or snapshot(key, file)
+    return from_file(text, json.loads(raw or "{}"), P.view(key, file))
 
 
 def maybe_rename(P, key, e, doc_id, tab_id, t, data):
@@ -38,11 +43,10 @@ def maybe_rename(P, key, e, doc_id, tab_id, t, data):
     if new == t["name"]:
         P.save()
         return
-    mcp.call("update", {"ref": {"object": "project", "id": doc_id}, "payload": {"kind": "patch", "patch": [
-        {"op": "set", "path": ["tabs", tab_id, "name"], "value": new}]}})
+    mcp.patch_doc(doc_id, {"op": "set", "path": ["tabs", tab_id, "name"], "value": new})
     of = e["file"]
-    nf = posix(os.path.join(os.path.dirname(of), base_for(new, base(of)) + ".md"))
-    moved = P.owned(key, of) and nf != of and not os.path.exists(nf)
+    nf = renamed_path(of, new)
+    moved = P.owned(key, of) and nf != of and free_path(P.cfg, key, nf)
     if moved:
         move_tab_files(key, of, nf)
         e["file"] = nf
@@ -57,9 +61,10 @@ def push_tab(P, key, e, doc_id, t, data, tab_id, new=False):
     file = e["file"]
     check_pushable(local_md(P, key, file)[0], file)
     create_widgets(P, key, e, tab_id, t, doc_id)
-    if local_hash(key, file) == t["hash"]:
+    snap = snapshot(key, file)
+    if snap[2] == t["hash"]:
         return
-    md, blocks = local_md(P, key, file)
+    md, blocks = local_md(P, key, file, snap)
     try:
         after, data = (None, data) if new else edit_tab(doc_id, t["node"], md, blocks, data, file)
         if after is None:  # a new tab, or a change the edits do not make: comments on the tab lose their place
@@ -76,13 +81,19 @@ def push_tab(P, key, e, doc_id, t, data, tab_id, new=False):
         return
     back, back_blocks, _ = to_markdown(after["xml"])
     ok = same(back, back_blocks, md, blocks)
-    t.update(rev=after["rev"], hash=local_hash(key, file), dhash=doc_hash(after["xml"]), fmt=FMT)
+    t.update(rev=after["rev"], hash=snap[2], dhash=doc_hash(after["xml"]), fmt=FMT)  # what was sent, not the
+    # file now: an edit made during the push is sent by the next sync
     t.pop("conflict_rev", None)
+    t.pop("conflict_hash", None)
+    for f in (theirs_path(key, file), theirs_blocks_path(key, file)):  # the conflict is merged and sent
+        to_trash(f)
     save_base(key, file, md, blocks)
     refresh(P, key, e, t)
     P.save()
     kind, what = ("created", "new tab · ") if new else ("pushed", "")
-    out.ev(kind if ok else "warn", file, f"{what}rev {after['rev']} · " + ("verified" if ok else "written, but the doc DIFFERS:"))
+    kept = None if ok else keep_copy(file)  # the doc did not take all of it: the file as sent stays in the trash
+    out.ev(kind if ok else "warn", file, f"{what}rev {after['rev']} · " + ("verified" if ok else
+           f"written, but the doc DIFFERS (the file as sent: {kept}):"))
     if not ok:
         out.say("\n".join(difflib.unified_diff(compare_lines(md, blocks), compare_lines(back, back_blocks),
                                                  "local", "doc", lineterm="", n=0)))
@@ -134,7 +145,7 @@ def write_ops(doc_id, node, ops, where):
     asking = (res.get("data") or {}).get("asking")
     if res.get("reason") == "anchors_affected" and asking:
         raise Blocked([u["id"] for u in asking])
-    sys.exit(f"{where}: update refused: {json.dumps(res, ensure_ascii=False)[:1500]}")
+    raise Refused(f"{where}: update refused: {brief(res)}")
 
 def rewrite_tab(doc_id, node, md, blocks, data, where):
     """Replace every block of the tab with md, part by part; comments on the tab lose their place (allowDetach)."""
@@ -169,17 +180,16 @@ def start_tab(P, key, e, doc_id, tab_id, node, name):
     """A tab just made with only its heading: record it, then push the local text into it."""
     data = mcp.read_node(doc_id, node)
     e["id"] = tab_id
-    t = {"name": name, "node": node, "rev": data["rev"], "hash": "", "widgets": {}, "h1": name, "fmt": FMT,
-         **({"parent": e["parent"]} if e.get("parent") else {})}
+    t = new_tab_state(name, node, data["rev"], h1=name, parent=e.get("parent"))
     P.dst(key)["tabs"][tab_id] = t
     P.save()
     push_tab(P, key, e, doc_id, t, data, tab_id, new=True)
 
 def tab_name(P, key, file):
     md, blocks = local_md(P, key, file)
-    if any(v.get("type") == "embed" and v.get("ref", "").startswith("node/")
+    if any(v.get("type") == "embed" and widget_id(v.get("ref"))
            and not v["ref"].startswith(NEW_WIDGET) for v in blocks.values()):
-        sys.exit(f"{file}: a new tab cannot show a diagram of another tab; make its own "
+        raise LocalError(f"{file}: a new tab cannot show a diagram of another tab; make its own "
                  f"({svc_dir(key)}/{base(file)}.widget-new-<name>.jsx + a chip with ref node/new-<name>)")
     check_pushable(md, file)
     return h1(md) or base(file).replace("-", " ")
@@ -192,7 +202,7 @@ def create_tab(P, key, e):
     name = tab_name(P, key, file)
     v = mcp.call("read", {"ref": {"object": "project", "id": doc_id}})["value"]
     orders = [t.get("order") for t in v["tabs"].values() if t.get("order")]
-    order = max(orders) + "m" if orders else "a1"
+    order = max(orders) + AFTER if orders else NEXT_ORDER
     birth = slug(name) + ".ldoc"
     place = {"name": name, "order": order, **({"subtabOf": e["parent"]} if e.get("parent") else {})}
     res = mcp.call("batch", {"container": C(doc_id), "batch": [
@@ -208,16 +218,20 @@ def create_tab(P, key, e):
         P.doc(key)["tabs"].append(e)
     start_tab(P, key, e, doc_id, lids["f"], lids["n"], name)
 
+def keep_doc_copy(file, data):
+    """The doc's version of a tab, in the trash, before docsync writes over it or deletes it. Returns its path."""
+    md, blocks, _ = to_markdown(data["xml"])
+    saved = os.path.join(TRASH, os.path.splitext(file)[0] + ".from-doc.md")
+    os.makedirs(os.path.dirname(saved), exist_ok=True)
+    write(saved, md)
+    save_json(saved[:-3] + ".blocks.json", blocks)
+    return saved
+
 def delete_tab(P, key, e, tab_id):
     """The tab's local file was deleted: delete the tab in the doc; its text from the doc goes to the trash."""
     doc_id = P.doc(key)["id"]
     t = P.dst(key)["tabs"][tab_id]
-    data = mcp.read_node(doc_id, t["node"])
-    md, blocks, _ = to_markdown(data["xml"])
-    saved = os.path.join(TRASH, os.path.splitext(e["file"])[0] + ".from-doc.md")
-    os.makedirs(os.path.dirname(saved), exist_ok=True)
-    write(saved, md)
-    write(saved[:-3] + ".blocks.json", json.dumps(blocks, ensure_ascii=False, indent=1) + "\n")
+    saved = keep_doc_copy(e["file"], mcp.read_node(doc_id, t["node"]))
     mcp.call("delete", {"ref": {"object": "file", "id": tab_id}, "container": C(doc_id)})
     for f in own_files(key, e["file"]):
         to_trash(f)
@@ -235,7 +249,7 @@ def create_doc(P, key):
         files = sorted(f for f in os.listdir(d) if f.endswith(".md")) if os.path.isdir(d) else []
         doc["tabs"] = [{"id": None, "file": posix(os.path.join(d, f))} for f in files]
     if not doc["tabs"]:
-        sys.exit(f"{P.dir(key)}: no .md files to make a doc from")
+        raise LocalError(f"{P.dir(key)}: no .md files to make a doc from")
     first = doc["tabs"][0]
     name = tab_name(P, key, first["file"])
     res = mcp.call("batch", {"container": {"kind": "project", "create": {"name": doc.get("name") or name,
@@ -243,12 +257,11 @@ def create_doc(P, key):
     lids = find_key(res, "lids")
     doc_id = (res.get("created") or {}).get("minted")
     if not doc_id:
-        sys.exit(f"doc created but its id was not found in the reply: {json.dumps(res, ensure_ascii=False)[:800]}")
+        raise RunError(f"doc created but its id was not found in the reply: {brief(res)}")
     doc["id"] = doc_id
-    P.dst(key)["id"] = doc_id
     P.save()
-    mcp.call("update", {"ref": {"object": "project", "id": doc_id}, "payload": {"kind": "patch", "patch": [
-        {"op": "set", "path": ["tabs", lids["f"], "order"], "value": "a0"}, {"op": "set", "path": ["tabs", lids["f"], "name"], "value": name}]}})
+    mcp.patch_doc(doc_id, {"op": "set", "path": ["tabs", lids["f"], "order"], "value": FIRST_ORDER},
+                  {"op": "set", "path": ["tabs", lids["f"], "name"], "value": name})
     out.ev("created", P.dir(key), f"new doc {doc_id} · id written to {P.config}", doc_id=doc_id, url=ARTIFACT + doc_id)
     start_tab(P, key, first, doc_id, lids["f"], lids["n"], name)
     for e in doc["tabs"][1:]:

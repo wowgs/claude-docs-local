@@ -6,7 +6,7 @@ server (claude_ai_Claude_Docs); the guard (`decide`, run by the hooks module) al
 the desktop app's server name."""
 import json, os
 
-from .projects import project_of, register, unregister
+from .projects import project_of, projects, register, unregister
 from .textio import load_json, write
 
 CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
@@ -44,8 +44,8 @@ def prune(s, *keys):
 def lock(s):
     """A project's settings: the files skill on, the Docs tools that write off."""
     s.setdefault("enabledPlugins", {})[FILES] = True
-    deny = s.setdefault("permissions", {}).setdefault("deny", [])
-    deny += [t for t in DENY if t not in deny]
+    rules = s.setdefault("permissions", {}).setdefault("deny", [])
+    rules += [t for t in DENY if t not in rules]
 
 
 def unlock(s):
@@ -106,6 +106,24 @@ def docs_tool(tool_name):
     return None
 
 
+def doc_of(tool_input):
+    """The doc a Docs call writes to: its container, or the doc it refers to."""
+    c, ref = tool_input.get("container") or {}, tool_input.get("ref") or {}
+    return c.get("id") or (ref.get("id") if ref.get("object") == "project" else None)
+
+
+def local_docs():
+    """The ids of every doc that a project of this user keeps as files."""
+    ids = set()
+    for root in projects():
+        try:
+            ids |= {d.get("id") for d in load_json(os.path.join(root, "docsync.json")).get("docs", {}).values()
+                    if isinstance(d, dict)}
+        except (OSError, ValueError):
+            pass
+    return ids - {None}
+
+
 def decide(call_input):
     """The guard's answer for one call of a tool named `mcp__*__create|batch|update|delete`: None lets it through,
     else a deny. Other servers' tools pass. The Docs ones pass outside projects; in a project only `create` of a
@@ -114,8 +132,8 @@ def decide(call_input):
     if tool not in WRITES:
         return None
     cwd = call_input.get("cwd")
-    if cwd and not project_of(cwd):
-        return None
+    if cwd and not project_of(cwd) and doc_of(call_input.get("tool_input") or {}) not in local_docs():
+        return None  # neither a session in a project nor a doc that one keeps as files
     if tool == "create" and call_input.get("tool_input", {}).get("object") == "utterance":
         return None
     return deny("this project's docs are local files; edit those instead (Docs tools may only write comments here)")
@@ -129,9 +147,3 @@ def installed(plugin_id):
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return next((r for r in recs if r.get("scope") == "user"), recs[0] if recs else None)
-
-
-def plugin_root():
-    """Where Claude Code installed docs-local (the path changes with every version), or None."""
-    rec = installed(PLUGIN)
-    return rec["installPath"] if rec else None

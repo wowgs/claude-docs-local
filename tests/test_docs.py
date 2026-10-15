@@ -47,3 +47,7 @@ class Setup(unittest.TestCase):
         self.assertEqual(steps, [str(i) for i in range(1, len(steps) + 1)])  # numbered without gaps
         for ref in re.findall(r"step (\d+)", body):
             self.assertIn(ref, steps)
+
+
+if __name__ == "__main__":
+    unittest.main()

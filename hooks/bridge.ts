@@ -62,13 +62,19 @@ export const register: Register = on => {
     if (!WRITES.test(e.tool)) return next(e)
     const reason = await guard($, e)
     return reason ? { deny: reason } : next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'docs-local: the guard on the Docs tools failed' }))
+  }).catch(async ($, e, next) => {
+    if (next.called) return next(e)
+    const docs = await findServer($).catch(() => undefined)
+    // fail closed for the Claude Docs tools only: another server's tools go on
+    if (docs && !e.tool.startsWith(`mcp__${docs}__`) && !e.tool.startsWith('mcp__claude_ai_Claude_Docs__')) return next(e)
+    return { deny: 'docs-local: the guard on the Docs tools failed' }
+  })
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
     void (async () => {
       const home = await $.env.get('HOME')
-      const commands = ['docsync', ...(home ? [`${home}/.local/bin/docsync`] : [])]
+      const commands = [`${$.plugin.root}/bin/docsync`, 'docsync', ...(home ? [`${home}/.local/bin/docsync`] : [])]
       for (const command of commands) {
         let socketPath: string | undefined
         const ask = (path: string, body?: unknown) =>

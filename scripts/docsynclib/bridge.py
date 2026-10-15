@@ -16,6 +16,8 @@ GET  /ping     -> 200 {"pump": seconds since the module last asked for work}
 """
 import http.client, http.server, json, os, queue, re, shutil, socket, socketserver, sys, tempfile, threading, time, uuid
 
+from .errors import RunError
+
 WAIT_S = 20     # how long GET /next holds the module before it answers 204
 CALL_S = 300    # how long a call waits for its result
 PUMP_S = 60     # a module that has not asked for work for this long is gone: calls answer "unavailable"
@@ -68,6 +70,22 @@ class Broker:
             slot["done"].set()
 
 
+def allowed(tool, args):
+    """Only the calls docsync makes go through the bridge: reads, comment queries, writes to tab contents and
+    diagrams, new docs and tabs, a tab deleted, a doc's name and tabs patched. Any process of this user can reach the
+    socket, so a doc deleted or anything else docsync never sends is refused here, not passed to the connector."""
+    ref = args.get("ref") or {}
+    if tool in ("read", "query", "create", "batch"):
+        return True
+    if tool == "delete":
+        return ref.get("object") == "file"
+    if tool == "update" and ref.get("object") == "project":
+        payload = args.get("payload") or {}
+        return payload.get("kind") == "patch" and all((p.get("path") or [""])[0] in ("name", "tabs")
+                                                       for p in payload.get("patch") or [])
+    return tool == "update" and ref.get("object") in ("node", "file")
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -100,6 +118,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         b = self.server.broker
         if self.path == "/call":
             req = self.body()
+            if not allowed(req.get("tool"), req.get("args") or {}):
+                return self.reply(200, {"error": f"the bridge does not pass this call: {req.get('tool')}"})
             return self.reply(200, b.call(req["tool"], req.get("args") or {}))
         if self.path.startswith("/result/"):
             b.result(self.path[len("/result/"):], self.body())
@@ -156,7 +176,7 @@ def whole(result, tool):
     except (OSError, ValueError):
         if tool in READS:
             return None
-        sys.exit(f"{tool}: the result was too large for this Claude Code session and its saved copy is gone: "
+        raise RunError(f"{tool}: the result was too large for this Claude Code session and its saved copy is gone: "
                  f"{m.group(1)}")
 
 
@@ -182,7 +202,7 @@ def call(tool, args):
     if "result" in out:
         return whole(out["result"], tool)
     if "error" in out:
-        sys.exit(f"{tool}: the Claude Docs connector of this Claude Code session failed: {out['error']}")
+        raise RunError(f"{tool}: the Claude Docs connector of this Claude Code session failed: {out['error']}")
     return None
 
 

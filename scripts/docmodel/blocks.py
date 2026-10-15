@@ -1,8 +1,7 @@
 """The local markdown cut the way the doc's markdown is cut: top-level blocks, list items, table rows and cells."""
 import re
 
-from .markdown import ATTR_LINE, CHIP, split_attrs
-from .write import server_md
+from .markdown import ATTR_LINE, CHIP, server_md, split_attrs
 
 ITEM = re.compile(r"(?:[-*+]|\d+[.)])\s+(?:\[([ xX])\]\s+)?")
 FENCE = re.compile(r"\s*(`{3,})")

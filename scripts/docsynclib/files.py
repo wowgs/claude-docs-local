@@ -1,11 +1,11 @@
 """Where a project's files are: tab files at the paths of the manifest; docsync's own files under .docsync/ (the
 chips, diagram code and pictures of each tab in .docsync/<doc key>/, the sync state, the background push); the
 trash. Paths are relative to the project root, which is the working folder."""
-import datetime, json, os, re, shutil
+import contextlib, datetime, json, os, re, shutil
 
 from . import output as out
 from docmodel.compare import sha
-from .textio import load_json, read, write
+from .textio import load_json, read, save_json, write
 
 TR = dict(zip("абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
               ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t",
@@ -17,7 +17,9 @@ PUSH = os.path.join(SVC, "push.json")  # the last background sync (conflicts "lo
 LOCK = os.path.join(SVC, "lock")
 TRASH = os.path.join(".docsync-trash", datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S"))
 BASE = os.path.join(SVC, "base")  # each tab as of the last sync, for a merge in a project whose conflicts are "local"
-IGNORE = ["/.docsync/state.json", "/.docsync/push.json", "/.docsync/lock", "/.docsync/base/", "/.docsync-trash/"]
+IGNORE_HEAD = "# docs-local: this machine's sync state"
+IGNORE = ["/" + p.replace(os.sep, "/") for p in (STATE, PUSH, LOCK)] + \
+    ["/" + BASE.replace(os.sep, "/") + "/", "/" + TRASH.split(os.sep)[0] + "/"]  # this machine's, out of git
 FMT = 3  # how pull writes a tab's file; a clean tab written by an older format is pulled again
 
 
@@ -91,25 +93,52 @@ def save_base(key, file, md, chips):
     write(p, json.dumps({"md": md, "chips": chips}, ensure_ascii=False))
 
 
+def theirs_path(key, file):
+    """The doc's version of a tab in conflict, as its file would show it, for Claude to merge."""
+    return os.path.join(svc_dir(key), base(file) + ".from-doc.md")
+
+
+def theirs_blocks_path(key, file):
+    return os.path.join(svc_dir(key), base(file) + ".from-doc.blocks.json")
+
+
 def own_files(key, file):
-    """The tab's files in .docsync/<doc key>/ (chips, diagram code, pictures) and its base in .docsync/base/."""
+    """The tab's files in .docsync/<doc key>/ (chips, diagram code, pictures, the doc's version in a conflict) and
+    its base in .docsync/base/."""
     d, pre = svc_dir(key), base(file) + "."
-    out = [os.path.join(d, f) for f in sorted(os.listdir(d))
-           if f == pre + "blocks.json" or (f.startswith(pre + "widget-") and f.endswith((".jsx", ".png")))] \
+    names = {pre + "blocks.json", pre + "from-doc.md", pre + "from-doc.blocks.json"}
+    found = [os.path.join(d, f) for f in sorted(os.listdir(d))
+             if f in names or (f.startswith(pre + "widget-") and f.endswith((".jsx", ".png")))] \
         if os.path.isdir(d) else []
-    return out + ([base_path(key, file)] if os.path.exists(base_path(key, file)) else [])
+    return found + ([base_path(key, file)] if os.path.exists(base_path(key, file)) else [])
 
 
 def tab_files(key, file):
     return [file] + own_files(key, file)
 
 
+def renamed_path(file, name):
+    """Where a tab file goes when its tab gets this name: the same folder; the number follows the name, the words stay."""
+    return posix(os.path.join(os.path.dirname(file), base_for(name, base(file)) + ".md"))
+
+
+def load_chips(key, file):
+    return json.loads(read_text(blocks_path(key, file)) or "{}")
+
+
 def read_text(p):
     return read(p) if os.path.exists(p) else None
 
 
+def snapshot(key, file):
+    """The tab file and its chips as they are now: (text, chips json text, their hash). A sync works on one snapshot,
+    so an edit made while it runs is not taken for sent."""
+    text, raw = read_text(file) or "", read_text(blocks_path(key, file)) or ""
+    return text, raw, sha(text, raw)
+
+
 def local_hash(key, file):
-    return sha(read_text(file) or "", read_text(blocks_path(key, file)) or "")
+    return snapshot(key, file)[2]
 
 
 def widgets_changed(key, file, t):
@@ -142,6 +171,36 @@ def keep_copy(path):
         return dst
 
 
+_held = 0  # how deep this process is in locked(): a command inside another (doc import runs a sync) locks once
+
+
+@contextlib.contextmanager
+def locked(root="."):
+    """The project's lock, .docsync/lock: one docsync at a time writes the manifest, the state and the tab files
+    (a background sync, a sync of the Stop hook, a command in a terminal). Waits for the one running."""
+    global _held
+    if _held:
+        _held += 1
+        try:
+            yield
+        finally:
+            _held -= 1
+        return
+    os.makedirs(os.path.join(root, SVC), exist_ok=True)
+    with open(os.path.join(root, LOCK), "a", encoding="utf-8") as f:
+        try:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX)
+        except ImportError:  # Windows has no fcntl
+            import msvcrt
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        _held = 1
+        try:
+            yield
+        finally:
+            _held = 0
+
+
 def to_trash(path):
     if os.path.exists(path):
         dst = os.path.join(TRASH, path)
@@ -163,7 +222,7 @@ def load_state():
 
 def save_state(st):
     os.makedirs(SVC, exist_ok=True)
-    write(STATE, json.dumps(st, ensure_ascii=False, indent=1))
+    save_json(STATE, st)
     ensure_gitignore()
 
 
@@ -187,5 +246,6 @@ def ensure_gitignore():
     missing = [p for p in IGNORE if p not in lines]
     if missing:
         sep = "" if not have or have.endswith("\n") else "\n"
-        write(".gitignore", have + sep + "# docs-local: this machine's sync state\n" + "\n".join(missing) + "\n")
+        head = "" if IGNORE_HEAD in lines else IGNORE_HEAD + "\n"
+        write(".gitignore", have + sep + head + "\n".join(missing) + "\n")
         out.ev("info", ".gitignore", "added docsync's own state files")

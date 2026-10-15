@@ -1,17 +1,19 @@
 """Import of a project's existing markdown files as Claude Docs. The model proposes which files make which docs, the
 user confirms, and this code does the rest: `--scan` lists the files, `--check` says what in them would not survive
 the doc, and `import FILE...` makes one doc of them (the first file is the main tab). The files stay where they are:
-the manifest maps each tab to its file, and docsync never renames or deletes them (they are outside the doc's folder). Links between files that are tabs become mentions in the doc, and links again
+the manifest maps each tab to its file, and docsync never renames or deletes them (they are outside the doc's
+folder). Links between files that are tabs become mentions in the doc, and links again
 when the tabs are pulled (docmodel/fileview.py)."""
 import json, os, re, sys
 
 from . import manifest, output as out
-from .files import SVC, posix, read_text, slug
+from .files import posix, read_text, slug, SVC
 from .manifest import CONFIG
-from .projects import project_name, project_of
+from .projects import project_manifest, project_name, project_of
 from .push import ARTIFACT
 from .sync import cmd_sync
 from docmodel.compare import h1
+from docmodel.markdown import CODE_SPAN, in_fence
 from docmodel.errors import NotPushable
 from docmodel.write import check_pushable
 
@@ -59,7 +61,10 @@ def check(path):
         return ["the file does not exist"]
     fm = LOSSES[0][1].match(text)
     body = text[fm.end():] if fm else text
-    losses = (["frontmatter"] if fm else []) + [what for what, rx in LOSSES[1:] if rx.search(body)]
+    lines = body.split("\n")
+    prose = "\n".join(l for l, code in zip(lines, in_fence(lines)) if not code)  # code keeps its text: no losses
+    prose = CODE_SPAN.sub("", prose)
+    losses = (["frontmatter"] if fm else []) + [what for what, rx in LOSSES[1:] if rx.search(prose)]
     try:
         check_pushable(text, path)
     except NotPushable as e:
@@ -83,18 +88,23 @@ def cmd_import(args):
     if args.check:
         print(json.dumps({f: check(f) for f in files}, ensure_ascii=False, indent=1))
         return
-    cfg = manifest.load(CONFIG) if os.path.exists(CONFIG) else \
-        {"schema": manifest.SCHEMA, "name": os.path.basename(root), "conflicts": "merge", "docs": {}}
+    cfg = project_manifest(root)
     taken = manifest.mapped(cfg)
     for f in files:
         if not os.path.exists(f):
             sys.exit(f"{f}: no such file")
         if f in taken:
             sys.exit(f"{f}: already a tab of {taken[f][0]}")
+    names = [os.path.splitext(os.path.basename(f))[0].lower() for f in files]
+    if len(set(names)) < len(names):
+        sys.exit("two of these files have the same name; a doc's tab files need names of their own")
     name = args.name or h1(read_text(files[0])) or os.path.splitext(os.path.basename(files[0]))[0]
     key = manifest.unique(slug(name), cfg["docs"])
-    cfg["docs"][key] = {"id": None, "name": name, "dir": posix(os.path.join("docs", key)),
-                        "tabs": [{"id": None, "file": f} for f in files]}
+    d = posix(os.path.join(manifest.DOCS, key))
+    while any(f.startswith(d + "/") for f in files) or os.path.exists(d):  # imported files stay the project's: the
+        key = manifest.unique(key + "-doc", cfg["docs"])  # doc's own folder for new tabs is one they are not in
+        d = posix(os.path.join(manifest.DOCS, key))
+    cfg["docs"][key] = {"id": None, "name": name, "dir": d, "tabs": [{"id": None, "file": f} for f in files]}
     manifest.save(cfg)
     args.dirs, args.force, args.config = [key], False, CONFIG
     cmd_sync(args, "push")

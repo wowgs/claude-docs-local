@@ -23,7 +23,8 @@ A doc's key is its key in `docsync.json`; `docsync doc add` and `docsync doc imp
 | a diagram of a tab | its code in `.docsync/<doc key>/<tab>.widget-<id>.jsx`; in the md, its picture line |
 | a new diagram | its code in `.docsync/<doc key>/<tab>.widget-new-<name>.jsx`, its chip in that tab's `blocks.json`, its placeholder in the md |
 | a new doc | its tab files first, by default in `docs/<doc name as a slug>/`; then `docsync doc import`; then its diagrams |
-| docsync's own | `docsync.json`, `.docsync/state.json`, `.docsync/push.json`, `*.png`: do not edit |
+| the doc's version of a tab in conflict | `.docsync/<doc key>/<tab>.from-doc.md`: read it to merge, do not edit it |
+| docsync's own | `docsync.json` and everything else in `.docsync/` (state, merge bases, pictures `*.png`, lock), `.docsync-trash/`: do not edit |
 
 docsync does not move your files: a file stays where you put it. A new diagram needs its doc's key, so a doc gets its diagrams after `docsync doc import` has made it.
 
@@ -68,6 +69,15 @@ To act on a comment:
 4. Reply in the thread and say what you changed. Use the Docs `create` tool with `object` `"utterance"`, the same `container`, and `payload` `{"value": {"body": "<reply>", "parent": {"object": "utterance", "id": "<thread id>"}}}`.
 5. Do not resolve a thread. The person who wrote it resolves it.
 
-The doc gets your edit at the next sync. In the sync modes, the sync runs when you finish your turn. If the sync makes a new doc, it asks you to open it once with the Artifact tool; do that.
+The doc gets your edit at the next sync. If the project syncs when Claude finishes a turn, the sync runs when you finish yours. If the sync makes a new doc, it asks you to open it once with the Artifact tool; do that.
 
-If the sync says that a comment which asks Claude stops a tab, your edit removes all the words of that comment, and nobody answered it yet. Reply in its thread, and the next sync sends the tab.
+If the sync says that a comment which asks Claude stops a tab, your edit removes all the words of that comment, and nobody answered it yet. Reply in its thread, and the next sync sends the tab. If your edit does not do what the comment asks, keep some of its words instead, or ask the user.
+
+## Conflicts
+
+A conflict is a tab changed in its file and in the doc since the last sync. What happens depends on `"conflicts"` in `docsync.json`:
+
+- `"merge"`: nothing is sent or written over. The doc's version is in `.docsync/<doc key>/<tab>.from-doc.md`, in the same form as the tab file. Merge it into the tab file and keep both sides' changes. Do not edit the `.from-doc.md` file. The next sync sends the tab file once it changed.
+- `"local"`: the sync merges by itself, block by block. Where both sides changed the same block, the file wins, and the doc's version goes to `.docsync-trash/`. You do nothing.
+
+Some conflicts only the user can decide, for example a tab file deleted here while the tab changed in the doc. The sync tells the user; do not try to resolve them.

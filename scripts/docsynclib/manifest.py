@@ -13,17 +13,20 @@ merges; "local": the local file wins. A property of the project (do other people
 Who owns a tab file follows from where it is: a file in its doc's dir is docsync's (renamed after the doc, moved to the
 trash when the tab is deleted in the doc; a new .md there is a new tab); a file elsewhere, such as README.md, is the
 project's (never renamed or deleted; a tab deleted in the doc only loses its mapping)."""
-import json, os
+import os
 
 from .files import posix, slug
-from .textio import load_json, write
+from .textio import load_json, save_json
 
 CONFIG = "docsync.json"
+DOCS = "docs"  # the folder of a new doc's folder: docs/<doc key>/
+MERGE, LOCAL = "merge", "local"  # conflicts: Claude merges, or the local file wins
+CONFLICTS = (MERGE, LOCAL)
 SCHEMA = 3  # a change is a breaking update (CHANGELOG.md); docsync moves older files to it when it reads them
 
 
 def load(path=CONFIG):
-    """The manifest, moved to schema 2 first when it is older (migrate.py)."""
+    """The manifest, moved to the current schema first when it is older (migrate.py for 2.x, here for 3.0)."""
     cfg = load_json(path)
     if cfg.get("schema", 1) < 2:
         from . import migrate
@@ -39,7 +42,7 @@ def load(path=CONFIG):
 
 
 def save(cfg, path=CONFIG):
-    write(path, json.dumps(cfg, ensure_ascii=False, indent=1) + "\n")
+    save_json(path, cfg)
 
 
 def normalize(cfg):
@@ -47,7 +50,7 @@ def normalize(cfg):
     tabs. Returns True when it changed something."""
     changed = False
     cfg.setdefault("schema", SCHEMA)
-    cfg.setdefault("conflicts", "merge")
+    cfg.setdefault("conflicts", MERGE)
     docs = cfg.setdefault("docs", {})
     for k in list(docs):
         v = docs[k]
@@ -61,7 +64,7 @@ def normalize(cfg):
             v["tabs"] = []
             changed = True
         if "dir" not in v and not v["tabs"]:
-            v["dir"] = posix(os.path.join("docs", k))
+            v["dir"] = posix(os.path.join(DOCS, k))
             changed = True
     return changed
 
@@ -75,11 +78,11 @@ def unique(key, docs, mine=None):
 
 def doc_dir(key, doc):
     """The folder where the doc's new tabs get their files."""
-    return doc.get("dir") or posix(os.path.join("docs", key))
+    return doc.get("dir") or posix(os.path.join(DOCS, key))
 
 
 def local_wins(cfg):
-    return cfg.get("conflicts") == "local"
+    return cfg.get("conflicts") == LOCAL
 
 
 def owned(key, doc, file):
@@ -90,6 +93,20 @@ def owned(key, doc, file):
 def mapped(cfg):
     """{tab file path: (doc key, tab entry)} over the whole project."""
     return {t["file"]: (k, t) for k, d in cfg["docs"].items() for t in d.get("tabs", [])}
+
+
+def name_taken(cfg, key, file):
+    """Does another tab of the doc have a file of this name? Its own files in .docsync/<key>/ are named by the file's
+    name without its folder, and case does not count on macOS: two such tabs would share them."""
+    b = os.path.splitext(os.path.basename(file))[0].lower()
+    return any(t["file"] != file and os.path.splitext(os.path.basename(t["file"]))[0].lower() == b
+               for t in cfg["docs"][key].get("tabs", []))
+
+
+def free_path(cfg, key, path):
+    """Can a tab file of this doc be moved or made at path: no file there, no tab of the project maps it, and no other
+    tab of the doc has its name?"""
+    return not os.path.exists(path) and path not in mapped(cfg) and not name_taken(cfg, key, path)
 
 
 def refs(cfg):

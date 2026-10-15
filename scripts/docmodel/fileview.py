@@ -12,7 +12,7 @@ Paths use "/"."""
 import posixpath, re
 from urllib.parse import quote, unquote
 
-from .markdown import ATTR_LINE, CHIP, outside_code, sub_chips
+from .markdown import ATTR_LINE, CHIP, chip_text, outside_code, sub_chips, widget_id
 
 IMAGE_LINE = re.compile(r'(\s*)!\[((?:\\.|[^\]\\])*)\]\((\S+) "claude block (\w+)"\)\s*$')
 LINK = re.compile(r'(?<![!\\])\[((?:\\.|[^\]\\])*)\]\(([^)\s]+)( "doc")?\)')
@@ -36,11 +36,12 @@ def to_file(md, blocks, view):
     for n, line in enumerate(lines):
         m = CHIP.fullmatch(line.strip())
         spec = m and blocks.get(m.group(1))
-        if spec and spec.get("type") == "embed" and spec.get("ref", "").startswith("node/"):
-            pic = previews.get(spec["ref"][5:])
+        if spec and spec.get("type") == "embed" and widget_id(spec.get("ref")):
+            pic = previews.get(widget_id(spec["ref"]))
             if pic:
                 indent = line[:len(line) - len(line.lstrip())]
-                lines[n] = f'{indent}![{label_md(spec.get("caption", ""))}]({rel(pic, here)} "claude block {m.group(1)}")'
+                caption = label_md(spec.get("caption", ""))
+                lines[n] = f'{indent}![{caption}]({rel(pic, here)} "claude block {m.group(1)}")'
     md = "\n".join(lines)
 
     def link(m):
@@ -74,7 +75,7 @@ def from_file(md, blocks, view):
             else:
                 spec.pop("caption", None)
             blocks[key] = spec
-            lines[n] = f"{m.group(1)}<?claude block {key}?>"
+            lines[n] = m.group(1) + chip_text(key)
     md = "\n".join(lines)
     count = [0]
 
@@ -93,6 +94,6 @@ def from_file(md, blocks, view):
             count[0] += 1
             key = f"l{count[0]}"
         blocks[key] = {"type": "mention", "ref": ref, "label": re.sub(r"\\(.)", r"\1", m.group(1))}
-        return f"<?claude block {key}?>"
+        return chip_text(key)
     md = outside_code(md, lambda s: LINK.sub(chip, s))
     return md, blocks

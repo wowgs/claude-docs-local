@@ -4,7 +4,7 @@
 
 ## Install
 
-Once, after both plugins are installed: `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json && claude plugin install docs-local-files@wowgs`.
+The plugins are installed once with `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json && claude plugin install docs-local-files@wowgs`. Then follow these steps.
 
 1. **Sync mode.** If `docsync project check` prints `"setup": true`, a mode is saved: skip this question and leave out `--mode` in step 3. Otherwise ask exactly this with AskUserQuestion:
    ```json
@@ -13,7 +13,7 @@ Once, after both plugins are installed: `claude plugin install docs-local --mark
      "header": "Sync",
      "multiSelect": false,
      "options": [
-       {"label": "Sync", "description": "When Claude finishes a turn, a sync sends the local edits and brings the doc's changes. Safe when other people edit the same docs: if a tab changed on both sides, Claude merges both versions."},
+       {"label": "Sync", "description": "When Claude finishes a turn with local edits, a sync sends them and brings the doc's changes. Safe when other people edit the same docs: if a tab changed on both sides, Claude merges both versions."},
        {"label": "Push", "description": "When Claude finishes a turn, a sync runs in the background, both ways. If a tab changed on both sides, the changes are merged block by block, and the local file wins where both changed the same block. For docs that only you edit, here and on claude.ai."},
        {"label": "I do (not recommended)", "description": "You run `docsync` yourself when you want. Claude only edits the local files. Claude does not learn about conflicts or about a comment for Claude that holds a tab back, and new docs do not show in the session's outputs."}
      ]
@@ -63,4 +63,4 @@ For a project that has markdown files that are not docs yet.
 
 ## Updates
 
-Claude Code updates both plugins: `docsync setup` turns on auto-update for the `wowgs` marketplace, and `claude plugin update docs-local@wowgs` does it at once. A new version brings its settings into a project the first time its skill runs there (`docsync project check`), so nothing here runs again.
+Claude Code updates both plugins: `docsync setup` turns on auto-update for the `wowgs` marketplace, and `claude plugin update docs-local@wowgs` does it at once. A new version brings its settings into a project when a session starts there (the SessionStart hook) or its skill runs there (`docsync project check`), and docsync moves an older project to the new version the first time it reads it. So nothing here runs again.

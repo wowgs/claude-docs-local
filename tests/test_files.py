@@ -57,6 +57,9 @@ class Changes(Sandbox):
         f.save_state({"schema": 2, "docs": {}})
         self.assertEqual(textio.read(".gitignore"), "node_modules\n# docs-local: this machine's sync state\n"
                          + "\n".join(f.IGNORE) + "\n")
+        textio.write(".gitignore", textio.read(".gitignore").replace(f.IGNORE[-1] + "\n", ""))
+        f.save_state({"schema": 2, "docs": {}})  # one line missing again: the heading is not written twice
+        self.assertEqual(textio.read(".gitignore").count("# docs-local"), 1)
 
     def test_trash_keeps_the_relative_path(self):
         os.chdir(self.tmp)
@@ -66,9 +69,6 @@ class Changes(Sandbox):
         self.assertEqual(textio.read(dst), "a")
         self.assertTrue(dst.startswith(f.TRASH + os.sep))
 
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class Keychain(unittest.TestCase):
@@ -88,3 +88,21 @@ class Keychain(unittest.TestCase):
                 os.environ.pop(k, None)
                 if v is not None:
                     os.environ[k] = v
+
+
+class Lock(Sandbox):
+    def test_a_second_process_waits_for_the_lock(self):
+        import subprocess, sys
+        os.chdir(self.tmp)
+        probe = ("import fcntl, sys; f = open('.docsync/lock', 'a')\n"
+                 "try:\n    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB); print('free')\n"
+                 "except BlockingIOError:\n    print('held')\n")
+        with f.locked():
+            with f.locked():  # the same process may lock again (doc import runs a sync)
+                held = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True).stdout.strip()
+        free = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True).stdout.strip()
+        self.assertEqual((held, free), ("held", "free"))
+
+
+if __name__ == "__main__":
+    unittest.main()

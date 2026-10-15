@@ -2,7 +2,22 @@
 import json, os
 
 from . import manifest
-from .files import load_state, posix, preview_path, save_state, svc_dir
+from .files import FMT, load_state, posix, preview_path, save_state, svc_dir
+
+
+SENDS = ("sync", "push")  # the modes that write to the doc
+RECEIVES = ("sync", "pull")  # the modes that write the local files
+
+
+def new_tab_state(name, node, rev, *, hash="", widgets=None, h1=None, dhash=None, fmt=None, parent=None):
+    """A tab's entry in the sync state, in one shape for every place that makes one."""
+    t = {"name": name, "node": node, "rev": rev, "hash": hash, "widgets": widgets or {}, "h1": h1,
+         "fmt": FMT if fmt is None else fmt}
+    if dhash:
+        t["dhash"] = dhash
+    if parent:
+        t["parent"] = parent
+    return t
 
 
 class Project:
@@ -43,10 +58,3 @@ class Project:
                 if f.startswith(pre) and f.endswith(".png"):
                     previews[f[len(pre):-4]] = posix(os.path.join(d, f))
         return {"dir": posix(os.path.dirname(file)), "previews": previews, "refs": manifest.refs(self.cfg)}
-
-    def tab_of(self, tab_id):
-        for key, d in self.cfg["docs"].items():
-            for e in d.get("tabs", []):
-                if e.get("id") == tab_id:
-                    return key, e
-        return None, None

@@ -3,7 +3,7 @@ does not read, underline (<u>) and highlight (<mark>). A paragraph replaced this
 that did not change, as a markdown replace does (checked on a scratch doc, 2026-10-15)."""
 import re
 
-from .markdown import CHIP
+from .markdown import outside_code, TAGS
 
 TOKEN = re.compile(r"\\([^\n])|(`+)((?:(?!\2).)+?)\2|<\?claude block (\w+)\?>|(</?(?:u|mark)>)|(\*\*|~~|\*)|(\\\n)|(!?\[)|(\n)",
                    re.S)
@@ -54,7 +54,8 @@ def nodes(s, chips, marks=()):
     def text(t, extra=()):
         if not t:
             return
-        ms = [{"type": m} if isinstance(m, str) else {"type": "link", "attrs": {"href": m[1]}} for m in active + list(extra)]
+        ms = [{"type": m} if isinstance(m, str) else {"type": "link", "attrs": {"href": m[1]}}
+              for m in active + list(extra)]
         node = {"type": "text", "text": t, **({"marks": ms} if ms else {})}
         prev = out[-1] if out else None
         if prev and prev["type"] == "text" and prev.get("marks") == node.get("marks"):
@@ -116,8 +117,6 @@ def paragraph(md, chips, heading=None):
 
 def has_tags(md):
     """Does md use <u> or <mark> outside code?"""
-    from .write import TAGS
-    from .markdown import outside_code
     found = []
     outside_code(md, lambda s: found.append(bool(TAGS.search(s))) or s)
     return any(found)

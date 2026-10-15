@@ -1,12 +1,16 @@
 """A tab's diagrams and charts (widgets): their code in .docsync/<doc key>/, synced like a tab, by freshness; and a
 picture of each, drawn by the doc (a screenshot read), that the tab file shows in place of the chip."""
-import json, os, sys
+import os
 
 from . import mcp, output as out
+from .errors import brief, LocalError, Refused
 from .files import blocks_path, keep_copy, new_widget_path, preview_path, read_text, widget_path
+from .files import load_chips
 from .mcp import C
-from .textio import write
+from .project import RECEIVES, SENDS
+from .textio import save_json, write
 from docmodel.compare import sha
+from docmodel.markdown import NODE
 
 
 NEW_WIDGET = "node/new-"  # an embed chip for a diagram made locally: .docsync/<key>/<tab>.widget-new-<slug>.jsx
@@ -30,7 +34,7 @@ def create_widgets(P, key, e, tab_id, t, doc_id):
     """Make the tab's new diagrams in the doc, then point their chips and files at the ids they got."""
     file = e["file"]
     bpath = blocks_path(key, file)
-    blocks = json.loads(read_text(bpath) or "{}")
+    blocks = load_chips(key, file)
     made = False
     for spec in blocks.values():
         if spec.get("type") != "embed" or not spec.get("ref", "").startswith(NEW_WIDGET):
@@ -39,22 +43,22 @@ def create_widgets(P, key, e, tab_id, t, doc_id):
         src = new_widget_path(key, file, name)
         code = read_text(src)
         if code is None:
-            sys.exit(f"{src}: missing; a chip with ref {spec['ref']} needs this file with the diagram's code")
+            raise LocalError(f"{src}: missing; a chip with ref {spec['ref']} needs this file with the diagram's code")
         out.status(f"creating diagram {name}", file)
         res = mcp.call("create", {"object": "node", "engine": "widget", "container": C(doc_id),
                               "payload": {"parent": {"object": "file", "id": tab_id}, "code": code}})
         wid = res.get("minted")
         if res.get("outcome") != "published" or not wid:
-            sys.exit(f"{src}: the doc did not publish this diagram: {json.dumps(res.get('report') or res, ensure_ascii=False)[:1500]}")
+            raise Refused(f"{src}: the doc did not publish this diagram: {brief(res.get('report') or res)}")
         v = read_widget(doc_id, wid)
         os.replace(src, widget_path(key, file, wid))
         fetch_preview(doc_id, wid, preview_path(key, file, wid))
-        spec["ref"] = "node/" + wid
+        spec["ref"] = NODE + wid
         t.setdefault("widgets", {})[wid] = {"pub": v.get("pub"), "hash": sha(code)}
         made = True
         out.ev("created", file, f"diagram {name} → {wid}")
     if made:
-        write(bpath, json.dumps(blocks, ensure_ascii=False, indent=1) + "\n")
+        save_json(bpath, blocks)
         P.save()
 
 
@@ -70,8 +74,7 @@ def push_widget(key, file, doc_id, info, wid, pub):
                           "payload": {"kind": "draft", "basePub": pub, "code": code}})
     if res.get("outcome") != "published":
         if (res.get("report") or {}).get("status") != "staged":
-            sys.exit(f"{path}: the doc did not take this code: "
-                     f"{json.dumps(res.get('report') or res, ensure_ascii=False)[:1500]}")
+            raise Refused(f"{path}: the doc did not take this code: {brief(res.get('report') or res)}")
         mcp.call("update", {"ref": {"object": "node", "id": wid}, "engine": "widget", "container": C(doc_id),
                         "payload": {"kind": "publish"}})
     info.update(pub=read_widget(doc_id, wid).get("pub"), hash=sha(code))
@@ -100,10 +103,10 @@ def sync_widgets(P, key, e, doc_id, t, mode, force, fetched=None):
         elif loc and rem and not force:
             out.ev("conflict", label, "diagram changed locally and in the doc · nothing done")
             conflict = True
-        elif loc and mode in ("sync", "push"):  # with --force also when the doc changed too: the local code wins
+        elif loc and mode in SENDS:  # with --force also when the doc changed too: the local code wins
             push_widget(key, file, doc_id, info, wid, v.get("pub"))
             out.ev("pushed", label, f"diagram · publish {info['pub']}")
-        elif rem and mode in ("sync", "pull"):
+        elif rem and mode in RECEIVES:
             if loc:
                 keep_copy(path)  # local edits the doc's code replaces: a copy in the trash
             write(path, v["code"])
