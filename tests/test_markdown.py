@@ -65,6 +65,16 @@ class ToMarkdown(unittest.TestCase):
                "</listItem></list></doc>")
         self.assertEqual(m.to_markdown(xml)[0], "pre **marked** post\n\n- item\n")
 
+    def test_a_mark_spans_every_run_that_carries_it(self):
+        xml = ("<doc><paragraph id='a.1'><text><bold>core sets </bold></text><text><bold><code>AX_On</code></bold></text>"
+               "<text><bold>,</bold></text><text> then </text><text><italic>one </italic></text>"
+               "<text><italic><bold>two</bold></italic></text><text><italic> three</italic></text></paragraph>"
+               "<paragraph id='.2'><text><link href='https://e.x'>see </link></text>"
+               "<text><link href='https://e.x'><code>x</code></link></text><text> and </text>"
+               "<text><bold>a</bold></text><mention user='u' self='true'/><text><bold>b</bold></text></paragraph></doc>")
+        self.assertEqual(m.to_markdown(xml)[0], "**core sets `AX_On`,** then *one **two** three*\n\n"
+                                                "[see `x`](https://e.x) and **a**<?claude block c1?>**b**\n")
+
     def test_unknown_block_is_refused(self):
         with self.assertRaises(SystemExit):
             m.to_markdown("<doc><quote id='a.1'/></doc>")

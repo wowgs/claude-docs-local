@@ -2,6 +2,12 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.1 — 2026-10-15
+
+- A push of a tab with bold, italic or a link around `code` no longer ends in "written, but the doc DIFFERS". The doc keeps such text as several pieces that each carry the mark. docsync wrote a pair of `**` around each piece, so the text it read back never matched the local file. Now one mark goes around all the pieces that carry it. All 22 synced tabs of three projects read back the same as their files.
+- A push no longer stops with `block_gone` on a block that it removed itself. When the piece by piece edits did not get there (as with the text above), docsync rewrote the tab from the read before its own edits, so it named blocks that those edits had already replaced. It now rewrites from the read after them.
+- The problem lines for Claude separate the doc and the tab with " / ". A doc named like its first tab looked like two tabs.
+
 ## 2.6.0 — 2026-10-15
 
 - A pull no longer stops with `unknown inline <comment>`. When the doc is read, it marks where each comment starts. docsync skips the mark.

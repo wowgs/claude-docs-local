@@ -97,6 +97,25 @@ class Sync(Base):
         self.assertIn(f"<paragraph id='{kept}'><text>kept</text>", self.fake.tabs["t1"]["xml"])  # untouched
         self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello, local\n\nkept\n\nnew one\n")
 
+    def test_a_rewrite_after_edits_that_landed_uses_the_tab_as_read_after_them(self):
+        self.fake.edit("t1", "# 1 Intro\n\nhello\n\nsecond\n\nthird")
+        self.run_sync()
+        textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhello\n\nthird, edited\n")
+        real, calls = sync.edits.plan, []
+
+        def plan_once(*a):  # the first pass deletes a block and edits one, then the edits give up
+            calls.append(1)
+            if len(calls) > 1:
+                raise sync.edits.Unsupported("x")
+            return real(*a)
+        sync.edits.plan = plan_once
+        try:
+            self.assertEqual(self.run_sync(), [("pushed", "1-intro")])  # not refused for a block it removed itself
+        finally:
+            sync.edits.plan = real
+        self.assertIn("verified", output.EVENTS[-1]["detail"])
+        self.assertEqual(self.fake.text("t1"), "# 1 Intro\n\nhello\n\nthird, edited\n")
+
     def test_a_change_the_edits_do_not_make_rewrites_the_tab_whole(self):
         self.run_sync()
         textio.write("docs/d/1-intro.md", "# 1 Intro\n\nhello, local\n")

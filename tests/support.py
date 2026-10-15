@@ -85,6 +85,10 @@ class FakeDocs:
         from docmodel.markdown import to_markdown
         return to_markdown(self.tabs[tab_id]["xml"])[0]
 
+    def block_ids(self, t):
+        ids = [a or b for a, b in re.findall(r"<paragraph id='([^']+)'.*?</paragraph>|<embed id='([^']+)'[^>]*/>", t["xml"])]
+        return [i if not i.startswith(".") else "p" + i for i in ids]
+
     def apply(self, t, op):
         """One prose op on the tab's top-level blocks, like the server: a paragraph replaced alone keeps its id."""
         blocks = re.findall(r"<paragraph id='([^']+)'.*?</paragraph>|<embed id='([^']+)'[^>]*/>", t["xml"])
@@ -152,6 +156,10 @@ class FakeDocs:
             raise AssertionError("nothing is staged to publish")
         if tool == "update" and ref.get("object") == "node":
             t = self.by_node(ref["id"])
+            have = set(self.block_ids(t))
+            for op in args["payload"]["ops"]:  # like the server: an op on a block that is gone refuses the call
+                if any(i not in have for i in (op.get("target") or {}).get("ids", [])):
+                    return {"verdict": "deny", "reason": "block_gone"}
             for op in args["payload"]["ops"]:
                 self.apply(t, op)
             t["rev"] += 1

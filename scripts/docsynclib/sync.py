@@ -176,9 +176,9 @@ def push_tab(d, st, doc_id, t, data, tab_id, new=False):
     blocks = json.loads(read_text(os.path.join(d, base + ".blocks.json")) or "{}")
     where = f"{d}/{base}"
     try:
-        after = None if new else edit_tab(doc_id, t["node"], md, blocks, data, where)
+        after, data = (None, data) if new else edit_tab(doc_id, t["node"], md, blocks, data, where)
         if after is None:  # a new tab, or a change the edits do not make: comments on the tab lose their place
-            rewrite_tab(doc_id, t["node"], md, blocks, data, where)
+            rewrite_tab(doc_id, t["node"], md, blocks, data, where)  # data: the tab as read after the edits
             out.status("verifying", base)
             after = read_node(doc_id, t["node"])
     except Blocked as e:  # the tab keeps what landed before the refusal; the local edits wait for the next sync
@@ -218,25 +218,26 @@ class Blocked(Exception):
 
 def edit_tab(doc_id, node, md, blocks, data, where):
     """Write only what changed, paragraph by paragraph (docmodel.edits), so comments on words that stay keep their
-    place; read the tab again after each write, until it reads as md. Returns the tab as read last, or None when the
-    edits do not get there: then the caller rewrites the tab whole."""
+    place; read the tab again after each write, until it reads as md. Returns (the tab, the tab), or (None, the tab
+    as read last) when the edits do not get there: then the caller rewrites the tab whole, from that read, since the
+    edits that landed already replaced or removed some blocks."""
     seen = set()
     for _ in range(PASSES):
         try:
             ops = edits.plan(data["xml"], data["rev"], md, blocks)
         except edits.Unsupported:
-            return None
+            return None, data
         if not ops:
-            return data
+            return data, data
         sig = json.dumps([{k: v for k, v in o.items() if k not in ("ifRev", "ifHash")} for o in ops], sort_keys=True)
         if sig in seen:  # the same edits again: the doc does not take them as planned
-            return None
+            return None, data
         seen.add(sig)
         part = edits.batch(ops)
         out.status(f"writing {len(part)} edit" + ("s" if len(part) != 1 else ""), where)
         write_ops(doc_id, node, part, where)
         data = read_node(doc_id, node)
-    return None
+    return None, data
 
 
 def write_ops(doc_id, node, ops, where):

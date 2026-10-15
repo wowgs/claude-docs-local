@@ -74,31 +74,30 @@ class Md:
                 merged[-1] = (merged[-1][0] + t, m)
             else:
                 merged.append((t, m))
-        out = []
-        for t, m in merged:
-            if t is None:
-                out.append(m)
+        return self.marked(merged, in_table)
+
+    def marked(self, runs, in_table):
+        """Runs as markdown. A mark spans every adjacent run that carries it: bold text with `code` in it is one
+        **…** around both, as the doc reads it back, not one pair of ** per run. The mark that spans more runs goes
+        outside (*one **two** three*); between marks that span as many, OUTER decides."""
+        out, i = [], 0
+        while i < len(runs):
+            t, m = runs[i]
+            marks = [x for x in m if x != "code"] if t is not None else []
+            if not marks:
+                out.append(m if t is None else "`" + t + "`" if "code" in m else esc(t, in_table))
+                i += 1
                 continue
-            if "code" in m:
-                s = "`" + t + "`"
-            else:
-                s = esc(t, in_table)
-            core = s.strip(" ")
-            if not core:  # only spaces, e.g. between two marked runs
-                out.append(s)
-                continue
-            lead = len(s) - len(s.lstrip(" "))
-            trail = len(s) - len(s.rstrip(" "))
-            for mark in m:
-                if mark == "bold":
-                    core = "**" + core + "**"
-                elif mark == "italic":
-                    core = "*" + core + "*"
-                elif mark == "strike":
-                    core = "~~" + core + "~~"
-                elif isinstance(mark, tuple):
-                    core = "[" + core + "](" + mark[1] + ")"
-            out.append(" " * lead + core + " " * trail)
+
+            def end(x):
+                j = i
+                while j < len(runs) and runs[j][0] is not None and x in runs[j][1]:
+                    j += 1
+                return j
+            best = max(marks, key=lambda x: (end(x), -OUTER.index(_kind(x))))
+            j = end(best)
+            out.append(_wrap(self.marked([(u, tuple(x for x in n if x != best)) for u, n in runs[i:j]], in_table), best))
+            i = j
         return "".join(out)
 
     def block(self, el, indent=""):
@@ -158,6 +157,24 @@ class Md:
     def cells(self, row):
         """A table row's cells as markdown."""
         return [CELL_BREAK.join(self.inline(p, in_table=True) for p in elements(cell)) for cell in elements(row)]
+
+
+OUTER = ("link", "bold", "italic", "strike")  # outside first when two marks span as many runs; code is innermost
+WRAP = {"bold": ("**", "**"), "italic": ("*", "*"), "strike": ("~~", "~~")}
+
+
+def _kind(mark):
+    return mark[0] if isinstance(mark, tuple) else mark
+
+
+def _wrap(s, mark):
+    """Put the mark around s; spaces at its ends stay outside, where markdown needs them."""
+    core = s.strip(" ")
+    if not core:  # only spaces, e.g. between two marked runs
+        return s
+    lead, trail = len(s) - len(s.lstrip(" ")), len(s) - len(s.rstrip(" "))
+    open_, close = ("[", "](" + mark[1] + ")") if isinstance(mark, tuple) else WRAP[mark]
+    return " " * lead + open_ + core + close + " " * trail
 
 
 def bullet(kind, n, item):

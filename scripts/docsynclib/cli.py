@@ -254,7 +254,8 @@ def sync_now(root, force=False):
         cmd_sync(a, a.cmd)
     except SystemExit as e:
         return 1, [str(e.code)]
-    problems = [f"{e['doc'] or ''} {e['path']}: {e['detail']}".strip() for e in out.EVENTS if e["kind"] in ("conflict", "warn")]
+    problems = [(f"{e['doc']} / " if e["doc"] else "") + f"{e['path']}: {e['detail']}" for e in out.EVENTS
+                if e["kind"] in ("conflict", "warn")]
     return (2 if out.CONFLICTS else 1 if problems else 0), problems
 
 
