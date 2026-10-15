@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.8 — 2026-10-15
+
+- In a Claude Code session, docsync can read a long tab again. Claude Code gives a hooks module a tool result over about 64,000 characters as an error text: "Error: result (N characters) exceeds maximum allowed tokens. Output has been saved to <file>". docsync took that text for a refusal, and the sync of a doc with such a tab stopped with "read refused". Now docsync reads the whole result from that file. When the file is gone, a read is sent again with docsync's own login. A write is not sent again, since it may have been done.
+- Checked on 2026-10-15 in this desktop session (Claude Code 2.1.295, through the bridge): a pull of a copy of the veche project stopped with "read refused" before the fix (a tab of 64,296 characters), and read every tab after it. A test covers the saved file, a lost file on a read and on a write.
+
 ## 2.6.7 — 2026-10-15
 
 - In a docs-local project in the desktop app, Claude can no longer change a doc through the Docs tools `batch`, `update` and `delete`. The project's deny rules name these tools as the terminal names them (`mcp__claude_ai_Claude_Docs__…`). The desktop app names the Claude Docs server by a UUID, so the rules did not apply there.
