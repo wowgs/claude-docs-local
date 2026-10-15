@@ -1,4 +1,5 @@
 import json, os, unittest
+from unittest import mock
 
 from support import Sandbox
 from docsynclib import claude as c, projects, textio
@@ -69,18 +70,41 @@ class Hook(Sandbox):
         os.makedirs(self.proj)
         c.turn_on(self.proj)
 
+    CREATE = c.DOCS_TOOL + "create"
+    DESKTOP = "1a59c906-04da-521d-bda7-7f71b9f9e01c"  # the desktop app names the Claude Docs server by a UUID
+
+    def call(self, obj, tool=CREATE):
+        return {"cwd": self.proj, "tool_name": tool, "tool_input": {"object": obj}}
+
     def test_comments_pass(self):
-        self.assertIsNone(c.decide({"cwd": self.proj, "tool_input": {"object": "utterance"}}))
+        self.assertIsNone(c.decide(self.call("utterance")))
 
     def test_tabs_contents_and_unknown_calls_are_denied_in_a_project(self):
         for obj in ("file", "node", "blob", None):
-            out = c.decide({"cwd": self.proj, "tool_input": {"object": obj}})
+            out = c.decide(self.call(obj))
             self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertEqual(c.decide({})["hookSpecificOutput"]["hookEventName"], "PreToolUse")
+        self.assertEqual(c.decide({"tool_name": self.CREATE})["hookSpecificOutput"]["hookEventName"], "PreToolUse")
 
     def test_outside_projects_everything_passes(self):
         os.makedirs(self.path("other"))
-        self.assertIsNone(c.decide({"cwd": self.path("other"), "tool_input": {"object": "file"}}))
+        self.assertIsNone(c.decide({"cwd": self.path("other"), "tool_name": self.CREATE,
+                                    "tool_input": {"object": "file"}}))
+
+    def test_the_docs_server_the_hooks_module_found_is_guarded_under_its_own_name(self):
+        tool = f"mcp__{self.DESKTOP}__create"
+        with mock.patch.dict(os.environ):
+            os.environ.pop("DOCSYNC_DOCS_SERVER", None)
+            self.assertIsNone(c.decide(self.call("node", tool)))  # no name from the module: not known as Docs
+        with mock.patch.dict(os.environ, {"DOCSYNC_DOCS_SERVER": self.DESKTOP}):
+            self.assertEqual(c.decide(self.call("node", tool))["hookSpecificOutput"]["permissionDecision"], "deny")
+            self.assertIsNone(c.decide(self.call("utterance", tool)))
+            out = c.decide(self.call("node"))  # the terminal's name stays guarded
+            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_other_servers_create_tools_pass(self):
+        with mock.patch.dict(os.environ, {"DOCSYNC_DOCS_SERVER": self.DESKTOP}):
+            for tool in ("mcp__0e55ddc7-28be-4db1-9222-59552e7807cb__create", "mcp__claude_ai_Notes__create", None):
+                self.assertIsNone(c.decide(self.call("node", tool)))
 
 
 if __name__ == "__main__":

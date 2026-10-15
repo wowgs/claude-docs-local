@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "mcp__claude_ai_Claude_Docs__create",
+        "matcher": "^mcp__.+__create$",
         "hooks": [
           {
             "type": "command",

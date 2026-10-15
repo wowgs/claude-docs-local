@@ -2,6 +2,12 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.6 — 2026-10-15
+
+- In a docs-local project in the desktop app, the Docs `create` tool now makes only comments. The hook that allows only comments did not run there. Its matcher named the tool as the terminal names it (`mcp__claude_ai_Claude_Docs__create`). The desktop app names the Claude Docs server by a UUID, so the tool is `mcp__<uuid>__create`. Claude Code compares a matcher of only letters, digits and `_` as an exact string.
+- The matcher is now the regular expression `^mcp__.+__create$`. Before each such call, the hooks module (`hooks/bridge.ts`) finds the Claude Docs server by its tools and sets `DOCSYNC_DOCS_SERVER` to its name. `docsync hook` guards the create tool of that server and of `claude_ai_Claude_Docs`. The create tools of other servers pass.
+- Checked on 2026-10-15. Bug: a desktop session (Claude Code 2.1.295) in this project had 2.6.5 installed, with its hook logging every input. A Docs `create` call with object `node` reached the Docs server, and the hook log stayed empty. Fix: `claude -p` (Claude Code 2.1.300) loaded the plugin from a folder, with a stub MCP server named by a UUID that has the Docs tools. With 2.6.5, all three test calls ran. With 2.6.6, docs-local refused the call with `node`. A comment (`utterance`) ran, and the create tool of another stub server ran.
+
 ## 2.6.5 — 2026-10-15
 
 - In a Claude Code session, docsync now calls the Claude Docs connector through that session, with no login of its own. This works in the desktop app, which does not refresh the login that docsync used before. When a session starts, a hooks module of the plugin (`hooks/bridge.ts`) starts `docsync bridge`. That broker listens on a Unix socket, and the module sets `DOCSYNC_BRIDGE` to its path. Every command and hook of the session inherits it. The module takes each tool call from the broker and runs it with the session's own connection (`$.mcp.call`).

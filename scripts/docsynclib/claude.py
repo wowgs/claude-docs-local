@@ -92,9 +92,19 @@ def deny(reason):
                                    "permissionDecisionReason": "docs-local: " + reason}}
 
 
+def docs_create(tool_name):
+    """Whether a tool is the Docs `create` tool. Its server is claude_ai_Claude_Docs in the terminal and a UUID in
+    the desktop app; the hooks module (hooks/bridge.ts) sets DOCSYNC_DOCS_SERVER to the name it found."""
+    server = os.environ.get("DOCSYNC_DOCS_SERVER")
+    return tool_name == DOCS_TOOL + "create" or bool(server) and tool_name == f"mcp__{server}__create"
+
+
 def decide(call_input):
-    """The hook's answer for one Docs `create` call: None lets it through, else a deny.
-    Outside projects everything passes; in a project only comments (object "utterance")."""
+    """The hook's answer for one `mcp__*__create` call: None lets it through, else a deny.
+    Other servers' create tools pass; the Docs one passes outside projects, and in a project only for comments
+    (object "utterance")."""
+    if not docs_create(call_input.get("tool_name")):
+        return None
     cwd = call_input.get("cwd")
     if cwd and not project_of(cwd):
         return None

@@ -168,8 +168,8 @@ def push_background(args):
                                                 **({"held": held} if held else {})}, ensure_ascii=False))
 
 def hook(args):
-    """Claude Code hooks: PreToolUse on the Docs `create` tool (only comments; tabs and contents are local files)
-    and Stop (send the local edits when Claude finishes a turn)."""
+    """Claude Code hooks: PreToolUse on the `create` tools (Docs `create` only for comments; tabs and contents are
+    local files) and Stop (send the local edits when Claude finishes a turn)."""
     try:
         event = json.load(sys.stdin)
     except ValueError:

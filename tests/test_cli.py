@@ -60,10 +60,15 @@ class Cli(Sandbox):
     def test_the_hook_denies_everything_but_comments(self):
         proj = self.path("proj")
         self.run_ok("project", "use", cwd=proj)
-        ok = self.run_ok("hook", stdin=json.dumps({"cwd": proj, "tool_input": {"object": "utterance"}}))
+        create = "mcp__claude_ai_Claude_Docs__create"
+        ok = self.run_ok("hook", stdin=json.dumps({"cwd": proj, "tool_name": create,
+                                                    "tool_input": {"object": "utterance"}}))
         self.assertEqual(ok, "")
-        no = json.loads(self.run_ok("hook", stdin=json.dumps({"cwd": proj, "tool_input": {"object": "file"}})))
+        no = json.loads(self.run_ok("hook", stdin=json.dumps({"cwd": proj, "tool_name": create,
+                                                                "tool_input": {"object": "file"}})))
         self.assertEqual(no["hookSpecificOutput"]["permissionDecision"], "deny")
+        other = {"cwd": proj, "tool_name": "mcp__other__create", "tool_input": {"object": "file"}}
+        self.assertEqual(self.run_ok("hook", stdin=json.dumps(other)), "")
         self.assertEqual(self.run_ok("hook", stdin="not json"), "")
 
     def installed(self, *ids):
