@@ -2,6 +2,13 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.4 — 2026-10-15
+
+- docsync no longer stops with HTTP 401 when Claude Code's stored login has expired. docsync reads the login that the `claude` command keeps in the Keychain (or in `.credentials.json`). Only the `claude` command refreshes that login. Claude Code in the desktop app takes its login from the app, so the stored login can expire after about 8 hours.
+- Before a request, docsync reads `expiresAt` of the stored login. If the login ends within 5 minutes, docsync runs `claude mcp list` in a clean environment and reads the login again. That command needs the login to list the claude.ai connectors, so it refreshes the login. It calls no model. docsync does not refresh the login itself, because each refresh replaces the refresh token and Claude Code must keep the new one.
+- If the doc answers HTTP 401, docsync does the same and sends the request once more. If the login has still ended after that, docsync asks you to run `claude` and /login.
+- Checked on 2026-10-15 with Claude Code 2.1.300: an expired stored login was refreshed by `claude mcp list` (valid for 8 more hours). A real 401 from a refused token was followed by a successful request with the stored token. A login that `claude` did not refresh because it was still valid was used as it was.
+
 ## 2.6.3 — 2026-10-15
 
 - A tilde in the doc's text no longer turns into strikethrough after a push. The doc strikes both `~x~` and `~~x~~`. A pull now escapes the tildes of a paragraph (`\~`) when two of them could pair up. A lone tilde (`~/src`) and tildes with spaces on both sides stay as they are.

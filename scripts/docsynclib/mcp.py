@@ -1,5 +1,6 @@
 """The Claude Docs connector: Claude Code's claude.ai login, the connector's MCP endpoint, tool calls."""
-import hashlib, json, os, platform, subprocess, sys, unicodedata, urllib.error, urllib.request, uuid
+import hashlib, json, os, platform, shutil, subprocess, sys, tempfile, threading, time, unicodedata, urllib.error
+import urllib.request, uuid
 
 from .textio import read
 
@@ -8,8 +9,10 @@ API = "https://api.anthropic.com"
 PROXY = "https://mcp-proxy.anthropic.com/v1/mcp/"
 UA = "docsync/1.0"
 SESSION = str(uuid.uuid4())
+MARGIN_S = 300  # a login that ends sooner than this is refreshed before a request
 _tok = None
 _url = None
+_refresh = threading.Lock()
 
 
 def keychain_service():
@@ -24,12 +27,10 @@ def keychain_service():
     return f"Claude Code-credentials-{digest}"
 
 
-def token():
+def stored_login():
     """Claude Code's claude.ai login, where Claude Code keeps it (code.claude.com/docs/en/iam): the Keychain on macOS,
-    else, and as the macOS fallback, .credentials.json in the Claude config folder."""
-    global _tok
-    if _tok:
-        return _tok
+    else, and as the macOS fallback, .credentials.json in the Claude config folder. Returns its "claudeAiOauth"
+    entry: accessToken, refreshToken, expiresAt (ms) and more."""
     conf = os.environ.get("CLAUDE_CONFIG_DIR")
     home_file = os.path.join(conf or os.path.join(os.path.expanduser("~"), ".claude"), ".credentials.json")
     raw = None
@@ -45,21 +46,86 @@ def token():
             where += " (a login that Claude Code keeps in Windows Credential Manager is not supported yet)"
         sys.exit(f"no Claude Code login found in {where}: run `claude` and /login with your claude.ai account")
     try:
-        _tok = json.loads(raw)["claudeAiOauth"]["accessToken"]
-    except (ValueError, KeyError):
+        login = json.loads(raw)["claudeAiOauth"]
+        login["accessToken"]
+    except (ValueError, KeyError, TypeError):
         sys.exit("Claude Code is not logged in with a claude.ai account (needed for the Claude Docs connector)")
-    return _tok
+    return login
+
+
+def ending(login, margin=None):
+    """True when the login has ended or ends within margin seconds (MARGIN_S by default). A login without expiresAt
+    is taken as valid."""
+    exp = login.get("expiresAt")
+    return isinstance(exp, (int, float)) and exp / 1000 < time.time() + (MARGIN_S if margin is None else margin)
+
+
+def claude_cli():
+    """The claude command: on PATH, else where its native installer puts it (hooks may run with a short PATH)."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    local = os.path.join(os.path.expanduser("~"), ".local", "bin", "claude")
+    return local if os.access(local, os.X_OK) else None
+
+
+def refresh_login():
+    """Have Claude Code refresh its stored login. Claude Code refreshes the login it keeps only when the claude
+    command runs; Claude Code in the desktop app takes its login from the app and leaves the stored one to expire
+    (about 8 hours). `claude mcp list` needs the login to list the claude.ai connectors and calls no model, so it
+    refreshes it. docsync does not refresh the login itself: each refresh replaces the refresh token, and Claude Code
+    must keep the new one. It runs in a clean environment, as it was checked (2026-10-15, Claude Code 2.1.300): only
+    the variables that choose where the login is kept are passed on."""
+    cli = claude_cli()
+    if not cli:
+        return
+    keep = ("HOME", "USER", "LOGNAME", "PATH", "SHELL", "LANG", "TMPDIR", "CLAUDE_CONFIG_DIR",
+            "CLAUDE_SECURESTORAGE_CONFIG_DIR")
+    env = {k: os.environ[k] for k in keep if k in os.environ}
+    with tempfile.TemporaryDirectory(prefix="docsync-login-") as cwd:  # no project MCP servers from the cwd
+        try:
+            subprocess.run([cli, "mcp", "list"], cwd=cwd, env=env, capture_output=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def token(stale=None):
+    """The access token of Claude Code's login, refreshed when it has ended. stale: a token the server refused (HTTP
+    401): refresh unless another request has already replaced it."""
+    global _tok
+    if _tok and stale is None:
+        return _tok
+    with _refresh:
+        if stale is not None and _tok and _tok != stale:
+            return _tok
+        login = stored_login()
+        # A stored token other than the refused one: Claude Code has refreshed it since, so it is used as it is.
+        if ending(login) or login["accessToken"] == stale:
+            refresh_login()
+            login = stored_login()
+            # Claude Code refreshes only a login near its end, by its own margin: one still valid is used.
+            if ending(login, 0) or (stale is not None and login["accessToken"] == stale):
+                sys.exit("Claude Code's claude.ai login has ended or was refused, and `claude mcp list` did not "
+                         "refresh it: run `claude` and /login")
+        _tok = login["accessToken"]
+        return _tok
 
 
 def http(url, body=None, headers=None):
-    h = {"Authorization": "Bearer " + token(), "User-Agent": UA}
-    h.update(headers or {})
-    req = urllib.request.Request(url, data=body, method="POST" if body else "GET", headers=h)
-    try:
-        with urllib.request.urlopen(req, timeout=180) as r:
-            return r.read().decode(), r.headers.get("Content-Type", "")
-    except urllib.error.HTTPError as e:
-        sys.exit(f"HTTP {e.code} {url}: {e.read().decode()[:400]}")
+    """One request with the login; on HTTP 401 the login is refreshed and the request sent once more."""
+    for attempt in (1, 2):
+        tok = token()
+        h = {"Authorization": "Bearer " + tok, "User-Agent": UA}
+        h.update(headers or {})
+        req = urllib.request.Request(url, data=body, method="POST" if body else "GET", headers=h)
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r:
+                return r.read().decode(), r.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as e:
+            if e.code == 401 and attempt == 1:
+                token(stale=tok)
+                continue
+            sys.exit(f"HTTP {e.code} {url}: {e.read().decode()[:400]}")
 
 
 def server_url():
