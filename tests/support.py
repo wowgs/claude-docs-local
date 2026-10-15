@@ -70,6 +70,8 @@ class FakeDocs:
         self.widgets = {}  # widget id -> {"code", "pub", "parent"}
         self.calls = []
         self.full_reads = 0
+        self.next_id = 1000
+        self.comment_rows = {}  # node -> the comment rows under that tab's body
 
     def add_tab(self, tab_id, name, md, order=None):
         self.tabs[tab_id] = {"name": name, "order": order or f"a{len(self.tabs)}", "node": "n-" + tab_id,
@@ -77,6 +79,42 @@ class FakeDocs:
 
     def edit(self, tab_id, md):
         self.tabs[tab_id].update(xml=xml_of(md), rev=self.tabs[tab_id]["rev"] + 1)
+
+    def text(self, tab_id):
+        """A tab's markdown, as docsync reads it."""
+        from docmodel.markdown import to_markdown
+        return to_markdown(self.tabs[tab_id]["xml"])[0]
+
+    def apply(self, t, op):
+        """One prose op on the tab's top-level blocks, like the server: a paragraph replaced alone keeps its id."""
+        blocks = re.findall(r"<paragraph id='([^']+)'.*?</paragraph>|<embed id='([^']+)'[^>]*/>", t["xml"])
+        els = re.findall(r"<paragraph id='[^']+'.*?</paragraph>|<embed id='[^']+'[^>]*/>", t["xml"])
+        ids = [a or b for a, b in blocks]
+        ids = [i if not i.startswith(".") else "p" + i for i in ids]
+
+        def made(source, keep=None):
+            md = re.sub(r"<\?claude block (\w+)\?>", lambda m: "EMBED " + source["blocks"][m.group(1)]["ref"],
+                        source["from"]["content"])
+            out = []
+            for e in re.findall(r"<paragraph id='[^']+'.*?</paragraph>|<embed id='[^']+'[^>]*/>", xml_of(md)):
+                self.next_id += 1
+                new = keep if keep and not out and e.startswith("<paragraph") else f"p.{self.next_id}"
+                out.append(re.sub(r"id='[^']+'", f"id='{new}'", e, count=1))
+            return out
+        target = op.get("target") or {}
+        at = [ids.index(i) for i in target.get("ids", [])]
+        if op["op"] == "replace":
+            els[at[0]:at[-1] + 1] = made(op["with"], ids[at[0]] if len(at) == 1 else None)
+        elif op["op"] == "insert":
+            pos = (0 if op["side"] == "start" else len(els)) if target["kind"] == "root" else \
+                at[0] + (1 if op["side"] == "after" else 0)
+            els[pos:pos] = made(op["source"])
+        elif op["op"] == "delete":
+            for k in sorted(at, reverse=True):
+                del els[k]
+        else:
+            raise AssertionError(f"unexpected op {op}")
+        t["xml"] = "<doc>" + "".join(els) + "</doc>"
 
     def by_node(self, node):
         return next(t for t in self.tabs.values() if t["node"] == node)
@@ -100,6 +138,8 @@ class FakeDocs:
             if t is None:  # like the server: a deleted tab is refused
                 return {"verdict": "refused", "code": "not_found"}
             return {"verdict": "allow", "rev": t["rev"], "data": {"rev": t["rev"], "xml": "<doc/>", "complete": True}}
+        if tool == "query" and args.get("object") == "utterance":
+            return {"verdict": "allow", "rows": self.comment_rows.get(args["payload"]["under"]["id"], [])}
         if tool == "update" and ref.get("object") == "node" and args.get("engine") == "widget":
             w, pl = self.widgets[ref["id"]], args["payload"]
             if pl["kind"] == "draft":  # like the server: valid code goes live at once, a stale basePub is refused
@@ -111,13 +151,10 @@ class FakeDocs:
                 return {"verdict": "allow", "outcome": "published"}
             raise AssertionError("nothing is staged to publish")
         if tool == "update" and ref.get("object") == "node":
-            op = args["payload"]["ops"][0]
-            if op["op"] == "replace":
-                t = self.by_node(ref["id"])
-                src = op["with"]
-                md = re.sub(r"<\?claude block (\w+)\?>", lambda m: "EMBED " + src["blocks"][m.group(1)]["ref"],
-                            src["from"]["content"])
-                t.update(xml=xml_of(md), rev=t["rev"] + 1)
+            t = self.by_node(ref["id"])
+            for op in args["payload"]["ops"]:
+                self.apply(t, op)
+            t["rev"] += 1
             return {"verdict": "allow"}
         if tool == "update" and ref.get("object") == "project":
             for p in args["payload"]["patch"]:

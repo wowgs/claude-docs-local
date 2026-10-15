@@ -5,8 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from . import output as out
 from .files import (TRASH, adopt_renamed, base_for, load_state, local_changed, local_hash, local_tab,
                     move_tab_files, read_text, save_state, slug, tab_files, to_trash)
-from .markdown import (check_pushable, chunks, compare_lines, doc_hash, full_ids, h1, md_source, same, sha,
-                       to_markdown, top_ids)
+from docmodel import edits
+from docmodel.markdown import (check_pushable, chunks, compare_lines, doc_hash, h1, md_source, same, sha,
+                               to_markdown)
+from docmodel.tree import full_ids, top_ids
 from .mcp import C, call, find_key, read_node
 from .projects import entry, load_cfg, save_cfg, set_cfg_id
 from .textio import write
@@ -172,24 +174,90 @@ def push_tab(d, st, doc_id, t, data, tab_id, new=False):
     if local_hash(d, base) == t["hash"]:
         return
     blocks = json.loads(read_text(os.path.join(d, base + ".blocks.json")) or "{}")
-    parts = chunks(md)
-    out.status(f"pushing part 1/{len(parts)}", base)
-    call("update", {"ref": {"object": "node", "id": t["node"]}, "engine": "prose", "container": C(doc_id),
-                    "payload": {"ops": [{"op": "replace", "target": {"kind": "blocks", "ids": top_ids(data["xml"])},
-                                         "ifRev": data["rev"], "with": md_source(parts[0][0], blocks)}]}})
-    append_parts(doc_id, t["node"], parts[1:], blocks)
-    out.status("verifying", base)
-    after = read_node(doc_id, t["node"])
+    where = f"{d}/{base}"
+    try:
+        after = None if new else edit_tab(doc_id, t["node"], md, blocks, data, where)
+        if after is None:  # a new tab, or a change the edits do not make: comments on the tab lose their place
+            rewrite_tab(doc_id, t["node"], md, blocks, data, where)
+            out.status("verifying", base)
+            after = read_node(doc_id, t["node"])
+    except Blocked as e:  # the tab keeps what landed before the refusal; the local edits wait for the next sync
+        now = read_node(doc_id, t["node"])
+        t.update(rev=now["rev"], dhash=doc_hash(now["xml"]))
+        save_state(d, st)
+        out.ev("warn", where, HELD, doc_id=doc_id, asks=asks(doc_id, t["node"], e.args[0]))
+        return
     back, back_blocks, _ = to_markdown(after["xml"])
     ok = same(back, back_blocks, md, blocks)
     t.update(rev=after["rev"], hash=local_hash(d, base), dhash=doc_hash(after["xml"]))
     t.pop("conflict_rev", None)
     save_state(d, st)
     kind, what = ("created", "new tab · ") if new else ("pushed", "")
-    out.ev(kind if ok else "warn", f"{d}/{base}", f"{what}rev {after['rev']} · " + ("verified" if ok else "written, but the doc DIFFERS:"))
+    out.ev(kind if ok else "warn", where, f"{what}rev {after['rev']} · " + ("verified" if ok else "written, but the doc DIFFERS:"))
     if not ok:
         out.say("\n".join(difflib.unified_diff(compare_lines(md, blocks), compare_lines(back, back_blocks),
                                                  "local", "doc", lineterm="", n=0)))
+
+
+def asks(doc_id, node, ids):
+    """For Claude: each comment that held a tab back, [{"thread": id, "text": its first message}]."""
+    o = call("query", {"object": "utterance", "container": C(doc_id),
+                       "payload": {"under": {"object": "node", "id": node}}}, soft=True)
+    text = {r["id"]: ((r.get("payload") or {}).get("value") or {}).get("body", "") for r in o.get("rows") or []}
+    return [{"thread": i, "text": text.get(i, "")} for i in ids]
+
+
+HELD = "not sent: an open comment for Claude is in the way · answer or resolve it in the doc, then sync again"
+PASSES = 30  # writes of one push at most: each sends what fits one write, then the tab is read again
+
+
+class Blocked(Exception):
+    """The doc refused a write that would remove every word of a comment that asks Claude and has no answer yet;
+    args[0] = the ids of those comment threads."""
+
+
+def edit_tab(doc_id, node, md, blocks, data, where):
+    """Write only what changed, paragraph by paragraph (docmodel.edits), so comments on words that stay keep their
+    place; read the tab again after each write, until it reads as md. Returns the tab as read last, or None when the
+    edits do not get there: then the caller rewrites the tab whole."""
+    seen = set()
+    for _ in range(PASSES):
+        try:
+            ops = edits.plan(data["xml"], data["rev"], md, blocks)
+        except edits.Unsupported:
+            return None
+        if not ops:
+            return data
+        sig = json.dumps([{k: v for k, v in o.items() if k not in ("ifRev", "ifHash")} for o in ops], sort_keys=True)
+        if sig in seen:  # the same edits again: the doc does not take them as planned
+            return None
+        seen.add(sig)
+        part = edits.batch(ops)
+        out.status(f"writing {len(part)} edit" + ("s" if len(part) != 1 else ""), where)
+        write_ops(doc_id, node, part, where)
+        data = read_node(doc_id, node)
+    return None
+
+
+def write_ops(doc_id, node, ops, where):
+    res = call("update", {"ref": {"object": "node", "id": node}, "engine": "prose", "container": C(doc_id),
+                          "payload": {"ops": ops}}, soft=True)
+    if res.get("verdict") == "allow":
+        return res
+    asking = (res.get("data") or {}).get("asking")
+    if res.get("reason") == "anchors_affected" and asking:
+        raise Blocked([u["id"] for u in asking])
+    sys.exit(f"{where}: update refused: {json.dumps(res, ensure_ascii=False)[:1500]}")
+
+
+def rewrite_tab(doc_id, node, md, blocks, data, where):
+    """Replace every block of the tab with md, part by part; comments on the tab lose their place (allowDetach)."""
+    parts = chunks(md)
+    out.status(f"pushing part 1/{len(parts)}", where)
+    write_ops(doc_id, node, [{"op": "replace", "target": {"kind": "blocks", "ids": top_ids(data["xml"])},
+                              "ifRev": data["rev"], "with": md_source(parts[0][0], blocks), "allowDetach": True}],
+              where)
+    append_parts(doc_id, node, parts[1:], blocks)
 
 
 def read_widget(doc_id, wid):

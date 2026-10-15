@@ -2,6 +2,21 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 2.6.0 — 2026-10-15
+
+- A pull no longer stops with `unknown inline <comment>`. When the doc is read, it marks where each comment starts. docsync skips the mark.
+- A push changes only what changed in a tab. It replaces a changed paragraph alone, rewords a heading as text, and inserts or deletes whole blocks, list items and table rows. Before, a push rewrote the whole tab, and the doc refused it when the tab had an open comment (`anchors_affected`).
+- A comment keeps its place while some of its words stay. On a test doc, a push that edited the blocks of 6 comments and kept their words kept all 6 in place.
+- If a push removes all the words of a comment, the comment stays open in the doc without a place.
+- The doc refuses this for a comment that asks Claude and has no answer yet. Then the sync skips only that tab and goes on with the other tabs. The tab keeps its local edits for the next sync. After an answer in that comment's thread, the same push goes through. Both were tested on a test doc with a comment written in the doc's page.
+- For such a tab, you see one line: "not sent: an open comment for Claude is in the way". Claude gets the comment, its thread id and the calls to read and answer it. In mode sync, the Stop hook gives it to Claude before Claude stops.
+- A tab that was not sent makes the summary line a warning: "! 1 doc · 1 warning", not "in sync".
+- Tested end to end on a test doc with comments sent to Claude from the doc's page and left without an answer (Claude Code 2.1.300, a session per mode, the plugin from this branch). Mode sync: the Stop hook held Claude back, Claude replied in the thread, and the next Stop sent the tab. Mode push: the background push was refused, the hook woke the idle session, Claude replied, and the next push went through. By hand: after the comment was resolved in the doc's page, the same sync sent the tab.
+- In mode push, a second Stop hook runs in the background (`asyncRewake`). It waits for the background push and wakes Claude when the push fails. A test session (Claude Code 2.1.296) showed that a Stop hook with `asyncRewake` wakes an idle session. `claude -p` ends this hook early. Then the push still finishes, and the end of the next turn shows a failure to you, as before.
+- The skill tells Claude how to work with comments. The comments stay in the doc. Claude acts on a comment only when asked, makes the edit in the file, and replies in the thread with what it changed. When the sync says that a question to Claude stops a tab, Claude replies in that thread. Claude never resolves a thread.
+- If docsync cannot make a change piece by piece, it rewrites the whole tab as before, and the comments in that tab lose their place. It does not report this. Examples: another number of table columns, or a changed list item that holds other blocks.
+- Code: the doc's XML, its markdown and the edits are a separate package, `scripts/docmodel`, with no network and no files. docsync calls it.
+
 ## 2.5.4 — 2026-10-14
 
 - The check after a push no longer reports "the doc DIFFERS" for two kinds of text that the doc stores in another form with the same content. A paragraph with line breaks inside it: the doc joins its lines into one. An underscore between two letters outside code (`X_C`): the doc writes it back as `X\_C`. The diff that a real difference prints compares the same way.

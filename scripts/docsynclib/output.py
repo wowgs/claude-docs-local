@@ -18,7 +18,7 @@ STYLE = {  # kind: (icon, verb, ANSI color)
     "deleted": ("−", "deleted", "31"), "renamed": ("✎", "renamed", "35"), "conflict": ("✗", "conflict", "1;31"),
     "skip": ("·", "skipped", "33"), "warn": ("!", "warning", "33"), "info": ("•", "", "34"), "insync": ("✓", "", "2"),
 }
-COUNTED = ("pushed", "pulled", "created", "deleted", "renamed", "conflict")
+COUNTED = ("pushed", "pulled", "created", "deleted", "renamed", "conflict", "warn")
 
 
 def warn(msg):
@@ -155,9 +155,9 @@ def doc_end():
     CTX["action"] = None
 
 
-def ev(kind, path, detail=""):
+def ev(kind, path, detail="", **more):
     """One result line: icon, verb, path, detail — aligned, coloured in a terminal.
-    Inside a doc: under its header, the path shown relative to the doc folder."""
+    Inside a doc: under its header, the path shown relative to the doc folder. `more` goes only into the event."""
     global CONFLICTS
     icon, verb, color = STYLE[kind]
     if kind in COUNTED:
@@ -166,7 +166,7 @@ def ev(kind, path, detail=""):
         CONFLICTS += 1
     EVENTS.append({"project": CTX["project"], "doc": DOC and DOC["name"], "kind": kind,
                    "path": path[len(DOC["dir"]) + 1:] if DOC and path.startswith(DOC["dir"] + "/") else path,
-                   "detail": detail})
+                   "detail": detail, **more})
     indent = "  "
     if DOC:
         if not DOC["shown"]:
@@ -181,8 +181,8 @@ def summary(st, unit):
     """'✓ all 3 docs in sync' or '✓ 3 docs · 2 pushed · 1 renamed' (unit: doc or project)."""
     n = st.get(unit + "s", 0)
     what = f"{n} {unit}{'' if n == 1 else 's'}"
-    parts = [paint(f"{st[k]} {STYLE[k][1]}", STYLE[k][2]) for k in COUNTED if st.get(k)]
-    bad = st.get("conflict")
-    head = paint("✗" if bad else "✓", "1;31" if bad else "1;32")
+    parts = [paint(f"{st[k]} {STYLE[k][1]}" + ("s" if k == "warn" and st[k] > 1 else ""), STYLE[k][2])
+             for k in COUNTED if st.get(k)]
+    head = paint("✗", "1;31") if st.get("conflict") else paint("!", "1;33") if st.get("warn") else paint("✓", "1;32")
     return f"{head} " + (f"{what} · " + " · ".join(parts) if parts else
                          (f"{what} in sync" if n == 1 else f"all {what} in sync"))

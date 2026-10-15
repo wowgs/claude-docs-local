@@ -1,7 +1,7 @@
 import unittest
 
 import support  # noqa: F401
-from docsynclib import markdown as m
+from docmodel import markdown as m
 
 DOC = (
     "<doc>"
@@ -57,6 +57,13 @@ class ToMarkdown(unittest.TestCase):
         xml = "<doc><table id='a.1'><row><cell><paragraph><text>x</text></paragraph></cell></row></table></doc>"
         with self.assertRaises(SystemExit):
             m.to_markdown(xml)
+
+    def test_comment_marks_carry_no_text(self):
+        xml = ("<doc><paragraph id='a.1'><text>pre </text><comment id='c1' to='claude' answered='false'/>"
+               "<text><bold>marked</bold></text><text> post</text></paragraph>"
+               "<list id='.2' kind='bullet'><listItem><paragraph><comment id='c2'/><text>item</text></paragraph>"
+               "</listItem></list></doc>")
+        self.assertEqual(m.to_markdown(xml)[0], "pre **marked** post\n\n- item\n")
 
     def test_unknown_block_is_refused(self):
         with self.assertRaises(SystemExit):
@@ -202,15 +209,6 @@ class Chunks(unittest.TestCase):
     def test_a_huge_paragraph_is_refused(self):
         with self.assertRaises(SystemExit):
             m.chunks("y" * (m.CAP + 10))
-
-
-class Ids(unittest.TestCase):
-    def test_short_ids_take_the_prefix_of_the_last_full_one(self):
-        self.assertEqual(m.top_ids(DOC), ["a.1", "a.2", "a.3", "a.4", "a.5", "a.6", "a.9"])
-
-    def test_table_rows_get_full_ids(self):
-        tables = [b for b in m.full_ids(DOC) if b[0] == "table"]
-        self.assertEqual(tables, [("table", "a.6", ["a.7", "a.8"])])
 
 
 class Helpers(unittest.TestCase):

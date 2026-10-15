@@ -8,7 +8,7 @@ user-invocable: false
 
 `docsync.json` in the project root lists the local docs: each folder with its doc id. A doc the task needs that is not local yet: `docsync doc add <link>`, without asking.
 
-The Docs tools write only comments here. Reply in a comment thread with them, and make the edit that a comment asks for in the files.
+The Docs tools write only comments here. Make the edit that a comment asks for in the files, as "Comments" below says.
 
 ## Files
 
@@ -30,3 +30,21 @@ Each doc is a folder:
 - **Project name:** `"name"` at the top of `docsync.json`.
 
 Before handing over, check that every `<?claude block KEY?>` has its key in `blocks.json`.
+
+## Comments
+
+The comments live in the doc, not in the files. Here the Docs tools can read them and can write a comment or a reply. They cannot change the text of a tab.
+
+A comment keeps its place while some of its words stay. If your edit removes all of its words, the comment stays open in the doc without a place.
+
+To act on a comment:
+
+1. Act on a comment only when the user asks you to or sends it to this session. Leave the other comments as they are.
+2. If you need the replies in its thread, read them with the Docs `query` tool: `object` `"utterance"`, `container` `{"kind": "project", "id": "<doc id>"}`, `payload` `{"under": {"object": "utterance", "id": "<thread id>"}}`. The doc id is in `docsync.json`.
+3. Make the edit in the local file.
+4. Reply in the thread and say what you changed. Use the Docs `create` tool with `object` `"utterance"`, the same `container`, and `payload` `{"value": {"body": "<reply>", "parent": {"object": "utterance", "id": "<thread id>"}}}`.
+5. Do not resolve a thread. The person who wrote it resolves it.
+
+The doc gets your edit at the next sync. In the sync modes, the sync runs when you finish your turn.
+
+If the sync says that a comment which asks Claude stops a tab, your edit removes all the words of that comment, and nobody answered it yet. Reply in its thread, and the next sync sends the tab.

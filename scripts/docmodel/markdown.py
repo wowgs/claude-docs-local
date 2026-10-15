@@ -1,32 +1,12 @@
 """The doc's XML as markdown plus chips, and the markdown cut into parts that fit one write."""
-import hashlib, html, json, re, sys
+import hashlib, json, re, sys
 
-TOKEN = re.compile(r"<!\[CDATA\[(.*?)\]\]>|<(/?)(\w+)([^>]*?)(/?)>|([^<]+)", re.S)
-ATTR = re.compile(r"(\w+)='([^']*)'")
+from .tree import elements, parse, strings
+
 ESC = re.compile(r"([\\`*_\[\]<>#|])")
 CHIP = re.compile(r"<\?claude block (\w+)\?>")
 CELL_BREAK = "<br>"  # several paragraphs (or a line break) in one table cell: no markdown the server reads back
 CAP = 30000  # server cap is 32768 bytes of inline content per write
-
-
-def parse(xml):
-    """Tiny parser for the docs XML: returns nested dicts {tag, attrs, children} / text strings."""
-    root = {"tag": "root", "attrs": {}, "children": []}
-    stack = [root]
-    for m in TOKEN.finditer(xml):
-        cdata, close, tag, attrs, selfclose, text = m.groups()
-        if cdata is not None:  # code: literal text
-            stack[-1]["children"].append(cdata)
-        elif text is not None:
-            stack[-1]["children"].append(html.unescape(text))
-        elif close:
-            stack.pop()
-        else:
-            el = {"tag": tag, "attrs": {k: html.unescape(v) for k, v in ATTR.findall(attrs)}, "children": []}
-            stack[-1]["children"].append(el)
-            if not selfclose:
-                stack.append(el)
-    return root["children"][0]
 
 
 def esc(s, in_table):
@@ -84,6 +64,8 @@ class Md:
                 a = c["attrs"]
                 alt = re.sub(r"([\\\[\]])", r"\\\1", a.get("alt", ""))
                 runs.append((None, f"![{alt}]({a['blob']})"))
+            elif c["tag"] == "comment":  # where a comment thread starts: the server paints it on a read, no text
+                continue
             else:
                 raise SystemExit(f"unknown inline <{c['tag']}>")
         merged = []
@@ -134,39 +116,19 @@ class Md:
         if tag == "list":
             kind = el["attrs"].get("kind", "bullet")
             lines = []
-            for n, item in enumerate(el["children"], int(el["attrs"].get("start", 1))):
-                if kind == "ordered":
-                    bullet = f"{n}. "
-                elif kind == "check":
-                    bullet = "- [x] " if item["attrs"].get("checked") == "true" else "- [ ] "
-                else:
-                    bullet = "- "
-                first = True
-                for sub in item["children"]:
-                    if sub["tag"] == "paragraph" and first:
-                        lines.append(indent + bullet + self.inline(sub))
-                        first = False
-                    else:
-                        lines.append("")
-                        lines += self.block(sub, indent + "    ")
+            for n, item in enumerate(elements(el), int(el["attrs"].get("start", 1))):
+                lines += self.item(item, bullet(kind, n, item), indent)
             return lines
         if tag == "table":
-            rows = []
-            for row in el["children"]:
-                cells = []
-                for cell in row["children"]:
-                    paras = [self.inline(p, in_table=True) for p in cell["children"]]
-                    cells.append(CELL_BREAK.join(paras))
-                rows.append(cells)
-            header = all(c["attrs"].get("header") == "true" for c in el["children"][0]["children"])
+            rows = [self.cells(row) for row in elements(el)]
+            header = all(c["attrs"].get("header") == "true" for c in elements(elements(el)[0]))
             if not header:
                 raise SystemExit("table without a header row is not supported")
-            lines = ["| " + " | ".join(rows[0]) + " |", "| " + " | ".join("---" for _ in rows[0]) + " |"]
-            lines += ["| " + " | ".join(r) + " |" for r in rows[1:]]
+            lines = [row_line(rows[0]), row_line(["---"] * len(rows[0]))] + [row_line(r) for r in rows[1:]]
             return [indent + l for l in lines]
         if tag == "blockquote":
             inner = []
-            for sub in el["children"]:
+            for sub in blocks_of(el):
                 if inner:
                     inner.append("")
                 inner += self.block(sub)
@@ -181,14 +143,33 @@ class Md:
             return [indent + "---"]
         raise SystemExit(f"unknown block <{tag}>")
 
+    def item(self, item, mark, indent=""):
+        """A list item's lines: its first paragraph after the bullet, then its other blocks indented."""
+        lines, first = [], True
+        for sub in blocks_of(item):
+            if sub["tag"] == "paragraph" and first:
+                lines.append(indent + mark + self.inline(sub))
+                first = False
+            else:
+                lines.append("")
+                lines += self.block(sub, indent + "    ")
+        return lines
 
-def strings(el):
-    """All text under an element, in order."""
-    for c in el["children"]:
-        if isinstance(c, str):
-            yield c
-        else:
-            yield from strings(c)
+    def cells(self, row):
+        """A table row's cells as markdown."""
+        return [CELL_BREAK.join(self.inline(p, in_table=True) for p in elements(cell)) for cell in elements(row)]
+
+
+def bullet(kind, n, item):
+    if kind == "ordered":
+        return f"{n}. "
+    if kind == "check":
+        return "- [x] " if item["attrs"].get("checked") == "true" else "- [ ] "
+    return "- "
+
+
+def row_line(cells):
+    return "| " + " | ".join(cells) + " |"
 
 
 def check_pushable(md, where):
@@ -199,10 +180,15 @@ def check_pushable(md, where):
                      "make it one paragraph, or edit that cell in the doc")
 
 
+def blocks_of(el):
+    """The blocks inside el (the doc, a list item, a quote), without comment marks."""
+    return [c for c in elements(el) if c["tag"] != "comment"]
+
+
 def to_markdown(xml):
     doc = parse(xml)
     md = Md()
-    parts = ["\n".join(md.block(b)) for b in doc["children"] if isinstance(b, dict)]
+    parts = ["\n".join(md.block(b)) for b in blocks_of(doc)]
     return "\n\n".join(parts) + "\n", md.blocks, doc
 
 
@@ -334,32 +320,3 @@ def chunks(md):
     if cur:
         parts.append((cur, False))
     return [(p + "\n", c) for p, c in parts]
-
-
-def top_ids(xml):
-    """Full ids of the top-level blocks; ids print short after the first full one: ".90" = "<prefix>.90"."""
-    full, prefix = [], ""
-    for i in [c["attrs"]["id"] for c in parse(xml)["children"] if isinstance(c, dict)]:
-        if not i.startswith("."):
-            prefix = i.split(".")[0]
-        full.append(i if not i.startswith(".") else prefix + i)
-    return full
-
-
-def full_ids(xml):
-    """Top-level blocks as (tag, full id, [full row ids]); ids print short after the first full one:
-    ".90" = "<prefix>.90"."""
-    out, pref = [], ""
-
-    def full(i):
-        nonlocal pref
-        if not i.startswith("."):
-            pref = i.split(".")[0]
-            return i
-        return pref + i
-    for c in parse(xml)["children"]:
-        if isinstance(c, dict):
-            i = full(c["attrs"]["id"])
-            rows = [full(r["attrs"]["id"]) for r in c["children"] if isinstance(r, dict) and r["tag"] == "row"]
-            out.append((c["tag"], i, rows))
-    return out

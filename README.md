@@ -8,7 +8,9 @@ docs-local can be run in one of 3 modes:
 - Sync: docs-local syncs when Claude finishes. If a tab also changed in the doc, Claude merges both versions. Use this mode when other people edit the same docs.
 - Push: docs-local pushes in the background when Claude finishes. The local copy overwrites the doc. **Use this mode for docs that only you edit.**
 
-A sync or a push rewrites each changed tab whole. Comments on the replaced text lose their anchor.
+A sync or a push changes only what changed in a tab: a paragraph, a heading, a list item, a table row or a table cell. A comment in the doc keeps its place while some of its words stay. If a push removes all the words of a comment, the comment stays open in the doc without a place. The doc does not let a push remove all the words of a comment that asks Claude and has no answer yet. Then the sync skips that tab and says that an open comment for Claude is in the way. In the sync and push modes, Claude gets that comment and answers it. When you sync by hand, answer or resolve the comment in the doc, or keep some of its words, and sync again. If docsync cannot make a change piece by piece, it rewrites the whole tab, and the comments in that tab lose their place.
+
+The comments stay in the doc and are not copied to the files. Claude reads them and replies in their threads with the Docs tools. It acts on a comment only when you ask it to or send the comment to its session.
 
 Works only with Docs artifacts. Diagrams and charts sync, images are not supported.
 
