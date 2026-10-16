@@ -2,6 +2,12 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.3.0 — 2026-10-16
+
+- **`docsync doc remove <doc key> [--delete-doc]` takes a doc out of a project.** The doc leaves `docsync.json` and the sync state. Its tab files in its folder, its own files in `.docsync/<doc key>/` and its merge bases go to `.docsync-trash/`, and its folder goes when nothing else is left in it. Tab files elsewhere, such as `README.md`, stay. The doc on claude.ai stays, or with `--delete-doc` it is deleted: docsync first keeps the text of each of its tabs in the trash, and when the doc refuses the delete, nothing changes locally. The delete goes with Claude Code's stored login, since a session's bridge does not pass a doc deleted. Not checked against the server: whether a delete of a whole doc works and whether it can be undone. A probe on an id that is no doc's got `deny` `access`, which the server also answers for a doc not shared.
+- `docsync doc list` shows each doc's key.
+- A doc that is no longer readable now also moves its merge bases to the trash.
+
 ## 4.2.1 — 2026-10-16
 
 - **A tab larger than about 64,000 characters could not be read in a Claude Code session** (reproduced on a live doc, a tab of 60,336 characters). Claude Code hands such a result to the hooks module as a note that names a file with the whole result. Its newer note says "(60,336 characters across 1 line)" and "Format: Plain text", and the file holds the result's text, where the note docsync knew said "(70,021 characters)" and "Format: JSON array". docsync took the note for a refusal, and the doc was not synced. It now reads both forms.

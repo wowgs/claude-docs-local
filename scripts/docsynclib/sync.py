@@ -6,7 +6,7 @@ import os
 
 from . import remote
 from .errors import LocalError
-from .files import base_for, blocks_path, FMT, locked, posix, svc_dir, theirs_path, TRASH, words
+from .files import BASE, base_for, blocks_path, FMT, locked, posix, svc_dir, theirs_path, TRASH, words
 from .manifest import local_wins, mapped, name_taken
 from .project import new_tab_state, Project, RECEIVES, SENDS, Tab
 from .pull import pull_tab
@@ -374,16 +374,27 @@ def doc_gone(mode, P, key):
     if mode not in ("sync", "pull"):
         return
     label = P.dir(key)
+    stay = drop_doc(P, key)
+    out.ev("deleted", label, f"doc not readable (deleted or no access) · files moved to {TRASH}"
+           + (" · these stay: " + ", ".join(stay) if stay else ""))
+
+
+def drop_doc(P, key):
+    """The doc leaves the project: out of the manifest and the sync state; its tab files in its folder, its own files
+    (.docsync/<key>/) and its merge bases (.docsync/base/<key>/) go to the trash, and its folder too when nothing
+    else is left in it. A tab file elsewhere is the project's and stays. Returns the files that stay."""
     stay = [e["file"] for e in P.doc(key)["tabs"] if not P.owned(key, e["file"])]
     for e in P.doc(key)["tabs"]:
         if P.owned(key, e["file"]):
             P.fs.to_trash(e["file"])
+    if P.fs.isdir(P.dir(key)) and not P.fs.listdir(P.dir(key)):
+        os.rmdir(P.fs.abs(P.dir(key)))
     P.fs.to_trash(svc_dir(key))
+    P.fs.to_trash(os.path.join(BASE, key))
     del P.cfg["docs"][key]
     P.st["docs"].pop(key, None)
     P.save()
-    out.ev("deleted", label, f"doc not readable (deleted or no access) · files moved to {TRASH}"
-           + (" · these stay: " + ", ".join(stay) if stay else ""))
+    return stay
 
 
 def adopt_renamed(P, key):

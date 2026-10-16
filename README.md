@@ -52,6 +52,7 @@ Tested on macOS and Linux. Windows: best effort :)
 docsync                 sync
 docsync status          what a sync would do
 docsync doc add <link>  add a doc to this project
+docsync doc remove <key> take a doc out of this project (--delete-doc: also on claude.ai)
 ```
 
 `docsync -h` for the rest.

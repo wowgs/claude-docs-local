@@ -206,6 +206,14 @@ class Call(unittest.TestCase):
         http.assert_not_called()
         self.assertEqual((out["value"], out["_images"]), (1, [b"PNG"]))
 
+    def test_a_direct_call_does_not_use_the_bridge(self):
+        with mock.patch.object(mcp.bridge, "call") as bridge, \
+                mock.patch.object(mcp, "server_url", return_value="https://proxy/s"), \
+                mock.patch.object(mcp, "http", return_value=(json.dumps({"result": self.result({"verdict": "allow"})}),
+                                                             "application/json")):
+            self.assertEqual(mcp.call("delete", {}, direct=True)["verdict"], "allow")
+        bridge.assert_not_called()
+
     def test_a_refusal_is_returned_when_soft_else_raised(self):
         res = self.result({"verdict": "deny", "reason": "access"})
         with mock.patch.object(mcp.bridge, "call", return_value=res):

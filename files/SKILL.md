@@ -51,6 +51,7 @@ Only docsync writes `docsync.json`; use these commands for it.
 - **Delete a tab:** delete its file.
 - **New doc:** write its tab files with their text, then `docsync doc import --name "<doc name>" <files, the main tab first>`. It makes the doc at once and prints its key. Then add its diagrams as for any doc: the code and chips in `.docsync/<that key>/`, and the next sync makes them.
 - **Rename a doc:** `docsync doc rename <doc key> "<name>"`.
+- **Take a doc out of the project:** `docsync doc remove <doc key>`. `docsync doc list` shows the keys. The doc's tab files in its `dir` and its files in `.docsync/<doc key>/` go to the trash. Tab files elsewhere stay. The doc on claude.ai stays. Add `--delete-doc` only when the user asks in so many words to delete the doc on claude.ai: the delete may not be reversible. Before it deletes, docsync keeps each tab's text from the doc in the trash.
 - **Project name:** `docsync project name "<name>"`.
 
 Do not edit `docsync.json` or `.docsync/state.json` by hand. Before handing over, check that every `<?claude block KEY?>` has its key in its `blocks.json`.

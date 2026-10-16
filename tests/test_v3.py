@@ -633,5 +633,73 @@ class Exits(Project):
         self.assertEqual(r.exit_code(), 2)
 
 
+class DocRemove(Project):
+    """docsync doc remove: a doc out of the project; the doc on claude.ai stays, or is deleted with --delete-doc."""
+
+    def setUp(self):
+        super().setUp()
+        textio.write("README.md", "# Readme\n\nhello\n")
+        self.fake.add_tab("t2", "Readme", "# Readme\n\nhello")
+        self.manifest({"d": {"id": "D1", "name": "Doc", "dir": "docs/d",
+                             "tabs": [{"id": "t1", "file": "docs/d/1-intro.md"}, {"id": "t2", "file": "README.md"}]},
+                       "other": {"id": None, "name": "Other", "dir": "docs/other", "tabs": []}})
+        projects.register(".")
+        self.run_sync()
+        self.assertTrue(os.path.exists(".docsync/base/d"))
+
+    def remove(self, *flags):
+        from docsynclib import cli
+        self.report = Report(json=True)
+        with self.assertRaises(SystemExit) as e:
+            cli.main(["doc", "remove", *flags], self.report)
+        return e.exception.code
+
+    def gone_here(self):
+        self.assertNotIn("d", self.cfg()["docs"])
+        self.assertIn("other", self.cfg()["docs"])
+        self.assertNotIn("d", files.Files(".").load_state()["docs"])
+        for f in ("docs/d", ".docsync/d", ".docsync/base/d"):
+            self.assertFalse(os.path.exists(f), f)
+        self.assertTrue(os.path.exists(os.path.join(files.TRASH, "docs/d/1-intro.md")))
+        self.assertEqual(textio.read("README.md"), "# Readme\n\nhello\n")  # the project's file stays
+
+    def test_the_doc_leaves_the_project_and_stays_on_claude_ai(self):
+        self.assertEqual(self.remove("d"), 0)
+        self.gone_here()
+        self.assertFalse(self.fake.deleted)
+        self.assertEqual([(e.kind, e.detail.split(" · ")[0]) for e in self.report.events],
+                         [("deleted", "out of this project"), ("info", "the doc stays on claude.ai: "
+                                                                          "https://claude.ai/code/artifact/D1")])
+        self.assertIn("these stay: README.md", self.report.events[0].detail)
+        self.assertEqual([p for _, p in self.run_sync()], ["docs/other"])  # only the other doc: d is not synced
+
+    def test_with_delete_doc_the_doc_goes_too_and_its_text_is_kept(self):
+        self.fake.edit("t1", "# 1 Intro\n\nchanged in the doc")
+        self.assertEqual(self.remove("d", "--delete-doc"), 0)
+        self.gone_here()
+        self.assertTrue(self.fake.deleted)
+        self.assertTrue(self.fake.direct)  # with the stored login: the bridge refuses a doc deleted
+        self.assertEqual(textio.read(os.path.join(files.TRASH, "docs/d/1-intro.from-doc.md")),
+                         "# 1 Intro\n\nchanged in the doc\n")
+        self.assertTrue(os.path.exists(os.path.join(files.TRASH, "README.from-doc.md")))
+        self.assertEqual(self.report.events[-1].detail.split(" · ")[0], "doc D1 deleted on claude.ai")
+
+    def test_a_refused_delete_changes_nothing_here(self):
+        self.fake.refuse_delete = {"verdict": "deny", "reason": "not_allowed"}
+        before = (self.cfg(), textio.read("docs/d/1-intro.md"))
+        code = self.remove("d", "--delete-doc")
+        self.assertIn("was not deleted on claude.ai", str(code))
+        self.assertIn("https://claude.ai/code/artifact/D1", str(code))
+        self.assertEqual((self.cfg(), textio.read("docs/d/1-intro.md")), before)
+
+    def test_an_unknown_key_and_the_keys_in_doc_list(self):
+        self.assertIn("no doc nope (keys: d, other)", str(self.remove("nope")))
+        from docsynclib import cli
+        r = Report(json=True)
+        with self.assertRaises(SystemExit):
+            cli.main(["doc", "list"], r)
+        self.assertTrue(r.events[0].detail.startswith("key d · Doc · D1 · 2 tabs"))
+
+
 if __name__ == "__main__":
     unittest.main()

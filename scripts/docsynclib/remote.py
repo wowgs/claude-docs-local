@@ -239,3 +239,9 @@ def first_tab(doc_id, tab_id, name):
 
 def delete_tab(doc_id, tab_id):
     mcp.call("delete", {"ref": {"object": "file", "id": tab_id}, "container": C(doc_id)})
+
+
+def delete_doc(doc_id):
+    """Delete the whole doc on claude.ai. Never through a session's bridge, which refuses it (bridge.allowed): with
+    Claude Code's stored login. Returns the doc's answer; a refusal is the caller's to report."""
+    return mcp.call("delete", {"ref": {"object": "project", "id": doc_id}}, soft=True, direct=True)

@@ -17,6 +17,8 @@ list items and table rows that changed, so a comment keeps its place while some 
                             doc; make one doc from these files (the first is the main tab)
   docsync doc list          docs of this project
   docsync doc rename <doc key> <name>   rename a doc
+  docsync doc remove <doc key> [--delete-doc]   take a doc out of this project (its files to the trash); the doc
+                            on claude.ai stays, or with --delete-doc is deleted (its text kept in the trash first)
   docsync tab add FILE [--doc KEY] [--parent FILE]   a new tab from a file (made by the next sync)
   docsync tab parent FILE [PARENT FILE]   put a tab under another tab, or at the top
   docsync project name <name>   the project's name
@@ -51,19 +53,22 @@ differently); 2 conflicts.
 """
 import argparse, json, os, platform, re, shutil, sys
 
-from . import bridge, importer, manifest
+from . import bridge, importer, manifest, remote
 from .claude import (edit_json, FILES, hide, installed, lock, PLUGIN, project_settings, turn_off, turn_on, unhide,
                      unlock, user_settings)
-from .errors import RunError
-from .files import Files, locked, posix, slug
+from .errors import brief, RunError
+from .files import base_for, Files, locked, posix, slug, TRASH
 from .hooks import hook, hook_wake, sync_background
 from .manifest import CONFLICTS
 from .mcp import call
 from .output import COUNTED, Report
+from .project import Project, Tab
 from .projects import (load_user, mode_of, MODES, project_manifest, project_name, project_of, project_state, projects,
                        save_user, set_mode, targets, user_config)
 from .push import ARTIFACT
-from .sync import cmd_sync
+from .sync import cmd_sync, drop_doc
+from .tabfile import keep_doc_copy
+from docmodel.errors import DocError
 from .textio import load_json, read, write
 
 HOOKS = ("hook", "hook-wake", "sync-background", "bridge")  # run by Claude Code or the hooks, not by people
@@ -112,8 +117,8 @@ def doc_list(args, report):
         sys.exit("not in a project: turn it on with /docs-local in Claude Code, or docsync project use")
     cfg = manifest.load(root, report) if manifest.exists(root) else {"docs": {}}
     for k, v in cfg["docs"].items():
-        report.ev("info", manifest.doc_dir(k, v), f"{v.get('name') or k} {v.get('id') or '(new, not created yet)'}"
-                  f" · {len(v.get('tabs', []))} tabs")
+        report.ev("info", manifest.doc_dir(k, v), f"key {k} · {v.get('name') or k} · "
+                  f"{v.get('id') or '(new, not created yet)'} · {len(v.get('tabs', []))} tabs")
 
 
 def in_project():
@@ -186,6 +191,49 @@ def doc_rename(args, report):
     cfg["docs"][args.key]["name"] = args.name
     manifest.save(root, cfg)
     print(json.dumps({"doc": args.key, "name": args.name}, ensure_ascii=False))
+
+
+def doc_remove(args, report):
+    """A doc out of this project: its entry leaves docsync.json and the sync state; its tab files in its folder, its
+    own files and its merge bases go to the trash; tab files elsewhere (such as README.md) stay. The doc on
+    claude.ai stays, or with --delete-doc is deleted first, each tab's text from the doc kept in the trash; when the
+    doc refuses the delete, nothing changes here."""
+    root = project_of(os.getcwd())
+    if not root:
+        sys.exit("not in a project: turn it on with /docs-local in Claude Code, or docsync project use")
+    P = Project(root, report)
+    report.project = project_name(root)
+    key = args.key
+    if key not in P.cfg["docs"]:
+        sys.exit(f"no doc {key} (keys: " + ", ".join(P.cfg["docs"]) + ")")
+    doc, label = P.doc(key), P.dir(key)
+    doc_id = doc.get("id")
+    report.begin_doc(label, doc.get("name") or key)
+    deleted = False
+    if args.delete_doc and doc_id:
+        try:
+            got = remote.remote_tabs(doc_id)
+            if got is not None:
+                files = {e.get("id"): e for e in doc["tabs"]}
+                for tab_id, name, node, _ in got[1]:
+                    e = files.get(tab_id) or {"id": tab_id, "file": posix(os.path.join(label, base_for(name) + ".md"))}
+                    report.status("keeping the doc's text", e["file"])
+                    keep_doc_copy(Tab(P, key, e), remote.read_tab(doc_id, node))
+                o = remote.delete_doc(doc_id)
+                if o.get("verdict") != "allow":
+                    sys.exit(f"the doc was not deleted on claude.ai ({brief(o, 300)}); nothing changed here. Delete it "
+                             f"at {ARTIFACT + doc_id}, then run: docsync doc remove {key}")
+                deleted = True
+        except DocError as e:
+            sys.exit(f"the doc could not be read before deleting it ({e}); nothing changed here")
+    stay = drop_doc(P, key)
+    report.ev("deleted", label, f"out of this project · files moved to {TRASH}"
+              + (" · these stay: " + ", ".join(stay) if stay else ""))
+    if deleted:
+        report.ev("deleted", label, f"doc {doc_id} deleted on claude.ai · its text kept in {TRASH}")
+    elif doc_id:
+        report.ev("info", label, f"the doc stays on claude.ai: {ARTIFACT + doc_id}")
+    report.end_doc()
 
 
 def project_rename(args, report):
@@ -446,6 +494,10 @@ def parser():
     a = doc.add_parser("rename", help="rename a doc (by its key in docsync.json)")
     a.add_argument("key")
     a.add_argument("name")
+    a = doc.add_parser("remove", help="take a doc out of this project; its files go to the trash")
+    a.add_argument("key", help="the doc's key in docsync.json (docsync doc list)")
+    a.add_argument("--delete-doc", action="store_true",
+                   help="also delete the doc on claude.ai (default: it stays); its text is kept in the trash first")
     tab = sub.add_parser("tab", help="tabs of the current project").add_subparsers(dest="sub", required=True)
     a = tab.add_parser("add", help="a new tab from a file; the next sync makes it")
     a.add_argument("file")
@@ -496,7 +548,7 @@ def under_lock(fn):
 
 COMMANDS = {
     "doc": {"add": under_lock(doc_add), "list": doc_list, "import": under_lock(importer.cmd_import),
-            "rename": under_lock(doc_rename)},
+            "rename": under_lock(doc_rename), "remove": under_lock(doc_remove)},
     "tab": {"add": under_lock(tab_add), "parent": under_lock(tab_parent)},
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove,
                 "mode": project_mode, "conflicts": under_lock(project_conflicts), "name": under_lock(project_rename)},

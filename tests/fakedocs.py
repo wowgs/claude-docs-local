@@ -436,6 +436,8 @@ class FakeDocs:
         self.next_id = 1000
         self.comment_rows = {}  # node -> the comment rows under that tab's body
         self.no_pictures = False
+        self.deleted = False  # the doc was deleted: reads of it are refused as the server refuses them
+        self.refuse_delete = None  # a refusal to answer a delete of the doc with
 
     def new_id(self):
         self.next_id += 1
@@ -481,10 +483,18 @@ class FakeDocs:
         t["rev"] += 1
         return {"verdict": "allow", "rev": t["rev"]}
 
-    def call(self, tool, args, soft=False):
+    def call(self, tool, args, soft=False, direct=False):
         self.calls.append((tool, copy.deepcopy(args)))
+        self.direct = direct  # the last call went with the stored login, past the bridge
         ref = args.get("ref", {})
         payload = args.get("payload") or {}
+        if self.deleted:
+            return {"verdict": "deny", "reason": "access"}
+        if tool == "delete" and ref.get("object") == "project":
+            if self.refuse_delete:
+                return self.refuse_delete
+            self.deleted = True
+            return {"verdict": "allow"}
         if tool == "read" and ref.get("object") == "project":
             return {"verdict": "allow", "value": {
                 "name": self.name,

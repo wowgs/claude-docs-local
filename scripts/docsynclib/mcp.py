@@ -142,10 +142,11 @@ def server_url():
     return _url
 
 
-def call(tool, args, soft=False):
+def call(tool, args, soft=False, direct=False):
     """One tool call of the Claude Docs connector: through the bridge of the Claude Code session that runs docsync
-    (bridge.py), else with Claude Code's stored login."""
-    result = bridge.call(tool, args)
+    (bridge.py), else with Claude Code's stored login. direct: always with the stored login, for a call the bridge
+    does not pass (a doc deleted)."""
+    result = None if direct else bridge.call(tool, args)
     if result is None:
         body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                            "params": {"name": tool, "arguments": args}}).encode()
