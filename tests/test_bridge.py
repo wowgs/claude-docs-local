@@ -111,6 +111,24 @@ class LargeResults(unittest.TestCase):
         small = {"content": [{"type": "text", "text": '{"verdict": "allow"}'}]}
         self.assertIs(bridge.whole(small, "read"), small)
 
+    def test_a_saved_copy_in_plain_text(self):
+        """As Claude Code wrote it on 2026-10-16 for a read of a tab of 60,336 characters: the count names its lines,
+        and the file holds the text of the result."""
+        import tempfile
+        from docsynclib import bridge, mcp
+        answer = '{"verdict":"allow","rev":2,"data":{"rev":2,"xml":"<doc>' + "x" * 60000 + '</doc>"}}'
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write(answer)
+        note = {"content": [{"type": "text", "text": f"Error: result (60,336 characters across 1 line) exceeds maximum "
+                                                     f"allowed tokens. Output has been saved to {f.name}.\nFormat: Plain "
+                                                     f"text\n- For targeted searches (find a string): use grep."}]}
+        try:
+            self.assertEqual(bridge.whole(note, "read"), {"content": [{"type": "text", "text": answer}]})
+            with mock.patch.object(bridge, "call", side_effect=lambda tool, args: bridge.whole(note, tool)):
+                self.assertEqual(mcp.read_node("D", "n")["rev"], 2)  # what docsync reads through the bridge
+        finally:
+            os.remove(f.name)
+
 
 class Allowed(unittest.TestCase):
     def test_only_the_calls_docsync_makes_go_through(self):

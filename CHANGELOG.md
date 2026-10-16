@@ -2,6 +2,10 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.2.1 — 2026-10-16
+
+- **A tab larger than about 64,000 characters could not be read in a Claude Code session** (reproduced on a live doc, a tab of 60,336 characters). Claude Code hands such a result to the hooks module as a note that names a file with the whole result. Its newer note says "(60,336 characters across 1 line)" and "Format: Plain text", and the file holds the result's text, where the note docsync knew said "(70,021 characters)" and "Format: JSON array". docsync took the note for a refusal, and the doc was not synced. It now reads both forms.
+
 ## 4.2.0 — 2026-10-15
 
 The architecture work that the review of 4.0.0 asked for and 4.1.0 left out. What a sync does is unchanged, except these fixes:

@@ -157,14 +157,17 @@ class Conn(http.client.HTTPConnection):
         self.sock.connect(self.path)
 
 
-SAVED = re.compile(r"^Error: result \([\d,]+ characters\) exceeds maximum allowed tokens\. Output has been saved to (\S+?)\.?\n")
+SAVED = re.compile(r"^Error: result \([^)]*\) exceeds maximum allowed tokens\. Output has been saved to (\S+?)\.?\n")
+# The note's count was "(70,021 characters)" in 2.6.8 and is "(60,336 characters across 1 line)" in Claude Code of
+# 2026-10-16; its "Format:" line says what the file holds (see whole).
 READS = ("read", "query")  # the tools docsync calls that change nothing: safe to send again
 
 
 def whole(result, tool):
     """The result as the tool gave it. Claude Code hands a module a large result (over about 64,000 characters, such as
-    a long tab) as an error text that names a file holding the whole content; that file is read. Without it, a read
-    is sent again with docsync's own login (None), and a write ends the run, since it may have been done."""
+    a long tab) as an error text that names a file holding the whole content; that file is read. It holds the result's
+    content blocks ("Format: JSON array") or the text of its one text block ("Format: Plain text"). Without the file,
+    a read is sent again with docsync's own login (None), and a write ends the run, since it may have been done."""
     content = result.get("content") or []
     text = content[0].get("text", "") if len(content) == 1 and content[0].get("type") == "text" else ""
     m = SAVED.match(text)
@@ -172,7 +175,10 @@ def whole(result, tool):
         return result
     try:
         with open(m.group(1), encoding="utf-8") as f:
-            return {"content": json.load(f)}
+            saved = f.read()
+        if "\nFormat: JSON array" in text:
+            return {"content": json.loads(saved)}
+        return {"content": [{"type": "text", "text": saved}]}
     except (OSError, ValueError):
         if tool in READS:
             return None
