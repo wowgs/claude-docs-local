@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.5.0 — 2026-10-19
+
+- **`docsync project detach [--force] [--offline]`** (and `/docs-local detach`) moves a project that synced with claude.ai Docs to mode `local`. It reads each doc once, for the names that the files keep only as ids (people, options of dropdowns) and to stop when a tab changed in the doc since the last sync (`--force` goes on anyway, `--offline` reads nothing and keeps the ids). Then in each tab file a chip becomes text (a date, `@name`, an option, a link to a tab or doc with a local file), a diagram becomes its picture in `img/` next to the file with its code beside it, and the `<!-- docsync … -->` lines go. The files before, `docsync.json` and `.docsync/` go to the trash, docsync's lines leave `.gitignore`, and the mode becomes `local`. The docs on claude.ai stay, no longer synced. Run on a copy of a project of 25 tab files: `docsync check` found nothing to fix afterwards.
+- The guide of mode `local` tells Claude to draw such a diagram again as SVG from its code when it changes it.
+
 ## 4.4.1 — 2026-10-19
 
 - **A push of a tab with a list right under a paragraph or a nested list right under its item ended in "written, but the doc DIFFERS"** (reproduced on two live tabs of one project, and on this repository's own docs). The doc keeps the same blocks, but docsync reads them back with a blank line between them, and the compare counted that blank line. Blank lines between blocks no longer count; paragraphs and code still compare as written.

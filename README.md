@@ -2,7 +2,7 @@
 
 A Claude Code plugin that makes Claude faster and cheaper at editing your claude.ai Docs. You keep reading and editing your docs on claude.ai as before. Claude edits a local markdown copy of each doc instead of changing the doc through the official Docs MCP, and docs-local syncs the copy back to the doc.
 
-A project can also keep its docs as local files only (mode `local`, recommended at setup): markdown in the repository, diagrams as SVG files that Claude writes next to them, and nothing synced with claude.ai. Claude's skill then teaches that format, and `docsync check` finds links, images and SVG files that a viewer would not show.
+A project can also keep its docs as local files only (mode `local`, recommended at setup): markdown in the repository, diagrams as SVG files that Claude writes next to them, and nothing synced with claude.ai. Claude's skill then teaches that format, and `docsync check` finds links, images and SVG files that a viewer would not show. `docsync project detach` moves a project that synced to this mode: its chips become text and its diagrams pictures next to the files.
 
 Two settings say how a project syncs:
 

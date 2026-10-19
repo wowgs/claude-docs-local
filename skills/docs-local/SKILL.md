@@ -1,7 +1,7 @@
 ---
 name: docs-local
-description: Turn local docs on for this project, or off with `remove`; `mode <manual|turn|local|default>` sets when this machine syncs it (local: never, the docs stay local files only); `conflicts <merge|local>` sets what a sync does with a tab changed on both sides; `import` makes docs of this project's markdown files.
-argument-hint: "[remove | mode <mode> | conflicts <merge|local> | import]"
+description: Turn local docs on for this project, or off with `remove`; `mode <manual|turn|local|default>` sets when this machine syncs it (local: never, the docs stay local files only); `conflicts <merge|local>` sets what a sync does with a tab changed on both sides; `import` makes docs of this project's markdown files; `detach` stops syncing for good and turns the files into plain markdown.
+argument-hint: "[remove | mode <mode> | conflicts <merge|local> | import | detach]"
 disable-model-invocation: true
 ---
 
@@ -12,4 +12,5 @@ disable-model-invocation: true
 3. Argument `mode <mode>`: run `docsync project mode <mode>` in the working folder; tell the user the project's sync mode in one line. With `local`: the docs are local markdown files only, with diagrams as SVG files, and nothing is synced with claude.ai.
 4. Argument `conflicts <merge|local>`: run `docsync project conflicts <merge|local>` in the working folder; tell the user in one line: with `merge` Claude merges a tab changed on both sides, with `local` the local file wins where both changed the same block.
 5. Argument `import`: if `docsync project check` says `"mode": "local"`, tell the user that import makes Claude Docs, so it needs a mode that syncs (`/docs-local mode turn`), and stop. Otherwise follow [SETUP.md](${CLAUDE_PLUGIN_ROOT}/skills/docs-local/SETUP.md), "Import".
-6. Otherwise: run `docsync project use` in the working folder; tell the user local docs are on for this project and to run `/reload-plugins`. If its output says `"mode": "local"`, stop there. Otherwise follow [SETUP.md](${CLAUDE_PLUGIN_ROOT}/skills/docs-local/SETUP.md), "Import".
+6. Argument `detach`: run `docsync project detach` in the working folder. If it stops because tabs changed in the doc since the last sync, run `docsync sync` and then `docsync project detach` again. Tell the user in two lines: the docs are local files only now, and the docs on claude.ai that its output lists stay there, no longer synced; delete them there if they are not needed.
+7. Otherwise: run `docsync project use` in the working folder; tell the user local docs are on for this project and to run `/reload-plugins`. If its output says `"mode": "local"`, stop there. Otherwise follow [SETUP.md](${CLAUDE_PLUGIN_ROOT}/skills/docs-local/SETUP.md), "Import".

@@ -44,10 +44,9 @@ After you write or change docs or diagrams, run `docsync check <files>`. It repo
 
 ## Files from an earlier sync
 
-If the project has `docsync.json`, its docs were synced with claude.ai Docs before. Their files can hold `<?claude block KEY?>` chips, with their values in `.docsync/<doc key>/<file name>.blocks.json`, and diagram pictures from `.docsync/`. Leave them as they are, unless the user asks you to convert them. To convert a doc:
+If the project has `docsync.json`, its docs were synced with claude.ai Docs before. Their files can hold `<?claude block KEY?>` chips, with their values in `.docsync/<doc key>/<file name>.blocks.json`, and diagram pictures from `.docsync/`. Leave them as they are, unless the user asks you to convert them. To convert them, run `docsync project detach`: it turns the chips into text and the diagrams into pictures in `img/`, and it moves `docsync.json` and `.docsync/` to the trash.
 
-- Replace each chip with text: a date as `YYYY-MM-DD`, a mention as a relative link or a name.
-- Draw each diagram again as an SVG file from its code in `.docsync/<doc key>/<file name>.widget-<id>.jsx`, or copy its picture into `img/` next to the doc.
+A diagram converted that way is a PNG picture in `img/`, with its code in a `.jsx` file of the same name beside it. When you change such a diagram, draw it again as an SVG file from that code. Then change the image line to the SVG, and delete the `.png` and the `.jsx`.
 
 ## Docs and code
 

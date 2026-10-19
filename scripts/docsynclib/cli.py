@@ -26,6 +26,8 @@ list items and table rows that changed, so a comment keeps its place while some 
   docsync project check | use [--mode M] | remove   for /docs-local: this folder's state, turn local docs on, off
   docsync project mode manual|turn|local|default   when this machine syncs this project; local: never
   docsync project conflicts merge|local   a tab changed on both sides: Claude merges, or the local file wins
+  docsync project detach [--force] [--offline]   stop syncing for good: the files become plain markdown (chips as
+                            text, diagrams as pictures in img/), docsync.json and .docsync/ go to the trash, mode local
   docsync setup scan        for the model during setup: folders Claude Code has worked in
   docsync setup --mode manual|turn|local [--conflicts merge|local] [--project <folder>]...   for the model during
                             setup
@@ -57,7 +59,7 @@ differently); 2 conflicts.
 """
 import argparse, json, os, platform, re, shutil, sys
 
-from . import bridge, checkdocs, importer, manifest, remote
+from . import bridge, checkdocs, detach, importer, manifest, remote
 from .claude import (edit_json, FILES, hide, installed, lock_for, PLUGIN, project_settings, turn_off, turn_on, unhide,
                      unlock, user_settings)
 from .errors import brief, RunError
@@ -539,6 +541,10 @@ def parser():
     a.add_argument("path", nargs="?")
     a = proj.add_parser("conflicts", help="a tab changed on both sides: merge (Claude merges) or local (the file wins)")
     a.add_argument("conflicts", choices=CONFLICTS)
+    a = proj.add_parser("detach", help="keep the docs as local files only: chips as text, diagrams as pictures, "
+                                       "docsync.json and .docsync/ to the trash, mode local")
+    a.add_argument("--force", action="store_true", help="also when a tab changed in the doc since the last sync")
+    a.add_argument("--offline", action="store_true", help="read no doc: people and options keep their ids")
     a = proj.add_parser("name", help="the project's name")
     a.add_argument("name")
     a = sub.add_parser("setup", help="for the model during setup: settings, the shell command, projects; then a check")
@@ -573,7 +579,8 @@ COMMANDS = {
             "rename": under_lock(doc_rename), "remove": under_lock(doc_remove)},
     "tab": {"add": under_lock(tab_add), "parent": under_lock(tab_parent)},
     "project": {"list": project_list, "check": project_check, "use": project_use, "remove": project_remove,
-                "mode": project_mode, "conflicts": under_lock(project_conflicts), "name": under_lock(project_rename)},
+                "mode": project_mode, "conflicts": under_lock(project_conflicts), "name": under_lock(project_rename),
+                "detach": under_lock(detach.cmd_detach)},
     "setup": {None: setup},
     "hook": {None: lambda args, report: hook()},
     "hook-wake": {None: lambda args, report: hook_wake()},
