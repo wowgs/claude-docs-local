@@ -8,10 +8,6 @@ __pycache__/
 # docs-local for this repo: its docs are kept out of git
 docs/
 docsync.json
-# docs-local: this machine's sync state
 /.docsync/
-/.docsync/state.json
-/.docsync/push.json
-/.docsync/lock
+# docs-local: old files kept by docsync
 /.docsync-trash/
-/.docsync/base/
