@@ -62,13 +62,17 @@ class Detach(Sandbox):
         self.assertEqual(textio.read(os.path.join(files.TRASH, self.intro)), before)  # the file before, kept
         self.assertEqual(projects.mode_of(self.root), "local")
         self.assertNotIn("deny", textio.load_json(claude.project_settings(self.root))["permissions"])
-        self.assertNotIn("docs-local", textio.read(".gitignore") if os.path.exists(".gitignore") else "")
+        self.assertIn("/.docsync-trash/", textio.read(".gitignore").split("\n"))  # the trash stays out of git
         self.assertIn("https://claude.ai/code/artifact/D1", " ".join(e.detail for e in self.report.events))
         r = Report(json=True)
         with self.assertRaises(SystemExit) as e:
             cli.main(["check"], r)
         self.assertEqual((e.exception.code, [ev.detail for ev in r.events]), (0, []))  # nothing left to fix
         self.assertEqual(self.fake.calls[-1][0], "read")  # it only read the doc
+        textio.write(".gitignore", "node_modules\n")  # lines lost: a second detach adds them back
+        textio.write("docsync.json", json.dumps({"schema": 3, "docs": {}}))
+        self.detach()
+        self.assertIn("/.docsync-trash/", textio.read(".gitignore").split("\n"))
 
     def test_a_change_in_the_doc_since_the_last_sync_stops_it_unless_forced(self):
         self.fake.edit("t2", "# 2 More\n\nchanged in the doc")

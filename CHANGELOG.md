@@ -2,9 +2,14 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.5.1 — 2026-10-19
+
+- **`docsync project detach` took docsync's lines out of `.gitignore`**, `/.docsync-trash/` among them, while it moved the files it replaced into that very folder: the trash then showed up in git. It now leaves docsync's lines in `.gitignore`, and adds them when they are missing.
+- A file or folder moved to the trash where the same run had moved one of that path already failed ("Directory not empty"), for example a second `.docsync/` in one run. It now goes beside it, with `-2`.
+
 ## 4.5.0 — 2026-10-19
 
-- **`docsync project detach [--force] [--offline]`** (and `/docs-local detach`) moves a project that synced with claude.ai Docs to mode `local`. It reads each doc once, for the names that the files keep only as ids (people, options of dropdowns) and to stop when a tab changed in the doc since the last sync (`--force` goes on anyway, `--offline` reads nothing and keeps the ids). Then in each tab file a chip becomes text (a date, `@name`, an option, a link to a tab or doc with a local file), a diagram becomes its picture in `img/` next to the file with its code beside it, and the `<!-- docsync … -->` lines go. The files before, `docsync.json` and `.docsync/` go to the trash, docsync's lines leave `.gitignore`, and the mode becomes `local`. The docs on claude.ai stay, no longer synced. Run on a copy of a project of 25 tab files: `docsync check` found nothing to fix afterwards.
+- **`docsync project detach [--force] [--offline]`** (and `/docs-local detach`) moves a project that synced with claude.ai Docs to mode `local`. It reads each doc once, for the names that the files keep only as ids (people, options of dropdowns) and to stop when a tab changed in the doc since the last sync (`--force` goes on anyway, `--offline` reads nothing and keeps the ids). Then in each tab file a chip becomes text (a date, `@name`, an option, a link to a tab or doc with a local file), a diagram becomes its picture in `img/` next to the file with its code beside it, and the `<!-- docsync … -->` lines go. The files before, `docsync.json` and `.docsync/` go to the trash, and the mode becomes `local`. The docs on claude.ai stay, no longer synced. Run on a copy of a project of 25 tab files: `docsync check` found nothing to fix afterwards.
 - The guide of mode `local` tells Claude to draw such a diagram again as SVG from its code when it changes it.
 
 ## 4.4.1 — 2026-10-19

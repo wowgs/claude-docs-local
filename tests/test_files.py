@@ -76,10 +76,10 @@ class Changes(Sandbox):
         copy = self.fs.keep_copy("doc/t.md")
         self.assertEqual(textio.read(self.path("doc/t.md")), "a")
         self.write("doc/t.md", "b")
-        dst = self.fs.to_trash("doc/t.md")
-        self.assertEqual(copy, dst)
+        dst = self.fs.to_trash("doc/t.md")  # the copy of this run stays: this one goes beside it
+        self.assertEqual(dst, os.path.join(f.TRASH, "doc", "t-2.md"))
         self.assertFalse(os.path.exists(self.path("doc/t.md")))
-        self.assertEqual(textio.read(self.path(dst)), "b")
+        self.assertEqual((textio.read(self.path(copy)), textio.read(self.path(dst))), ("a", "b"))
         self.assertTrue(dst.startswith(f.TRASH + os.sep))
         self.assertIsNone(self.fs.to_trash("doc/t.md"))  # nothing there: nothing moved
 

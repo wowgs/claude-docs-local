@@ -241,8 +241,13 @@ class Files:
             return dst
 
     def to_trash(self, path):
+        """Move a file or folder into the trash, at its path in the project; a path already there this run gets -2, -3
+        …, so nothing in the trash is written over."""
         if self.exists(path):
-            dst = os.path.join(TRASH, path)
+            dst, n = os.path.join(TRASH, path), 2
+            stem, ext = os.path.splitext(dst)
+            while self.exists(dst):
+                dst, n = f"{stem}-{n}{ext}", n + 1
             self.move(path, dst)
             return dst
 

@@ -2,6 +2,8 @@
 "local"). Each tab file becomes plain markdown: a chip becomes text (a date, a name, an option, a label), a diagram
 becomes its picture in `img/` next to the file, with its code beside it for the agent to draw again as SVG, the
 `<!-- docsync … -->` lines go. Then docsync.json and .docsync/ go to the trash and the project's mode becomes "local".
+The project's .gitignore keeps its lines, and gets docsync's when it has none: .docsync-trash/, where all of
+this goes, stays out of git.
 The docs on claude.ai stay as they are, no longer synced.
 
 Before it converts anything, it reads each doc once: for the names that the files keep only as ids (people in
@@ -13,7 +15,7 @@ from urllib.parse import unquote
 from . import remote
 from .claude import edit_json, lock_for, project_settings
 from .errors import DocError, RunError
-from .files import base, IGNORE, IGNORE_HEAD, SVC, TRASH, widget_path
+from .files import base, SVC, TRASH, widget_path
 from . import manifest
 from .manifest import CONFIG, exists
 from .project import Project
@@ -180,17 +182,6 @@ def read_docs(P):
     return names, stale
 
 
-def drop_ignore(fs):
-    """docsync's lines out of the project's .gitignore."""
-    have = fs.read(".gitignore")
-    if have is None:
-        return
-    lines = [l for l in have.split("\n") if l != IGNORE_HEAD and l not in IGNORE]
-    text = "\n".join(lines)
-    if text != have:
-        fs.write(".gitignore", text)
-
-
 def cmd_detach(args, report):
     root = project_of(os.getcwd())
     if not root:
@@ -226,9 +217,9 @@ def cmd_detach(args, report):
         if doc.get("id"):
             report.ev("info", P.dir(key), f"stays on claude.ai, no longer synced: {ARTIFACT + doc['id']}")
     report.end_doc()
+    P.fs.ensure_gitignore()  # all of this goes to .docsync-trash/: it stays out of git
     for path in (CONFIG, SVC):
         P.fs.to_trash(path)
-    drop_ignore(P.fs)
     set_mode(root, LOCAL)
     edit_json(project_settings(root), lock_for(root))
     report.say(f"mode local: {CONFIG} and .docsync/ moved to {TRASH}; draw the diagrams again as SVG when you edit "
