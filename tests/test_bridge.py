@@ -145,5 +145,24 @@ class Allowed(unittest.TestCase):
         self.assertEqual([bridge.allowed(t, a) for t, a in no], [False] * len(no))
 
 
+class Interrupted(unittest.TestCase):
+    """The session's connector failed a call (2026-10-18: "The tool call was interrupted before a result was
+    received"): a read goes again with docsync's own login, a write ends the run."""
+
+    def test_a_read_falls_back_a_write_stops(self):
+        from docsynclib import bridge
+        from docsynclib.errors import RunError
+        answer = mock.Mock()
+        answer.read.return_value = json.dumps({"error": "The tool call was interrupted"}).encode()
+        conn = mock.Mock()
+        conn.getresponse.return_value = answer
+        with mock.patch.dict(os.environ, {"DOCSYNC_BRIDGE": __file__}), mock.patch.object(bridge, "Conn",
+                                                                                         return_value=conn):
+            self.assertIsNone(bridge.call("read", {}))
+            self.assertIsNone(bridge.call("query", {}))
+            with self.assertRaises(RunError):
+                bridge.call("update", {})
+
+
 if __name__ == "__main__":
     unittest.main()

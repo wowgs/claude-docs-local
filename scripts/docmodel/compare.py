@@ -1,5 +1,5 @@
-"""Two versions of a tab compared as the doc sees them: soft line breaks, in-word underscores, chip numbering and
-mention labels do not count."""
+"""Two versions of a tab compared as the doc sees them: soft line breaks, blank lines between blocks, in-word
+underscores, chip numbering and mention labels do not count."""
 import hashlib, json, re
 
 from .markdown import in_fence, sub_chips, to_markdown
@@ -57,10 +57,15 @@ def plain_underscores(line):
 
 
 def compare_lines(md, blocks):
-    """The lines that two versions of a tab are compared by: soft line breaks joined, in-word underscores unescaped,
-    chips rendered, then norm. Fenced code is compared as written."""
+    """The lines that two versions of a tab are compared by: soft line breaks joined, blank lines dropped, in-word
+    underscores unescaped, chips rendered, then norm. Fenced code is compared as written.
+
+    A blank line outside code only separates blocks, and the doc keeps the blocks, not the lines between them: a list
+    right under a paragraph line, a nested list right under its item's line, a paragraph right under a heading read
+    the same with or without one, and docsync writes them back with one (seen on live docs, 2026-10-18). Paragraphs
+    still differ, since unwrap has joined the lines of each paragraph before this."""
     lines = unwrap(md.split("\n"))
-    out = [l if code else plain_underscores(l) for l, code in zip(lines, in_fence(lines))]
+    out = [l if code else plain_underscores(l) for l, code in zip(lines, in_fence(lines)) if code or l.strip()]
     return norm(render("\n".join(out), blocks))
 
 

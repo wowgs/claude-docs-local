@@ -2,6 +2,11 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.4.1 — 2026-10-19
+
+- **A push of a tab with a list right under a paragraph or a nested list right under its item ended in "written, but the doc DIFFERS"** (reproduced on two live tabs of one project, and on this repository's own docs). The doc keeps the same blocks, but docsync reads them back with a blank line between them, and the compare counted that blank line. Blank lines between blocks no longer count; paragraphs and code still compare as written.
+- **A read that the session's Claude Docs connector broke off stopped the whole sync** (seen 2026-10-18: "The tool call was interrupted before a result was received"). A read changes nothing, so it now goes again with docsync's own login; a write still ends the run, since it may have been done.
+
 ## 4.4.0 — 2026-10-19
 
 - **Mode `local`: the docs are local files only.** A third value of `sync`, beside `manual` and `turn`, set as the machine's default (`docsync setup --mode local`) or for one project (`docsync project mode local`, `/docs-local mode local`). Setup offers it first, as the recommended one. In such a project the docs are markdown files in the repository and diagrams are SVG files next to them. docsync never syncs it: `sync`, `status`, `pull` and `push` pass it with one line, and `doc add` and `doc import` refuse. The Stop hook does nothing there, the bridge does not start, the guard on the Docs tools leaves it alone, and its settings have no deny rules for them. Projects already set up keep their mode.

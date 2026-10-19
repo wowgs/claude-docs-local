@@ -212,6 +212,8 @@ def call(tool, args):
         c.close()
     if "result" in out:
         return whole(out["result"], tool)
+    if "error" in out and tool in READS:
+        return None  # a read changes nothing: sent again with docsync's own login (seen 2026-10-18: "interrupted")
     if "error" in out:
         raise RunError(f"{tool}: the Claude Docs connector of this Claude Code session failed: {out['error']}")
     return None

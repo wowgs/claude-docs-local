@@ -104,6 +104,16 @@ class Push(Sandbox):
             self.assertIn(before[before.rindex("<", 0, before.index(kept)) - 200:before.index(kept)].split("<")[-1],
                           self.fake.tabs["t1"]["xml"])
 
+    def test_blocks_written_without_blank_lines_between_them_read_back_verified(self):
+        """As on live docs (2026-10-18): a list right under a paragraph line, a nested list right under its item, a
+        paragraph right under a heading. The doc keeps the same blocks and docsync reads them back with blank lines."""
+        text = ("# 1 Intro\n\nWhat it keeps:\n- one\n    - nested\n    - nested two\n- two\n\n## Next\nA paragraph.\n"
+                "\n```\ncode\n\nwith a blank line\n```\n")
+        textio.write(self.file(), text)
+        [(kind, _, detail)] = self.sync()
+        self.assertEqual(kind, "pushed", detail)
+        self.assertIn("verified", detail)
+
     def test_a_link_and_marks_changed_inside_a_paragraph(self):
         textio.write(self.file(), RICH)
         self.sync()

@@ -293,5 +293,14 @@ class CodeWithBackticks(unittest.TestCase):
         self.assertEqual(md, "a `` `x` `` b ```p``q```\n")
 
 
+class BlankLines(unittest.TestCase):
+    def test_blank_lines_between_blocks_do_not_count_but_paragraphs_and_code_do(self):
+        from docmodel.compare import same
+        self.assertTrue(same("a\n- x\n    - y\n", {}, "a\n\n- x\n\n    - y\n", {}))
+        self.assertTrue(same("## H\ntext\n", {}, "## H\n\ntext\n", {}))
+        self.assertFalse(same("one\n\ntwo\n", {}, "one\ntwo\n", {}))  # two paragraphs, or one
+        self.assertFalse(same("```\na\n\nb\n```\n", {}, "```\na\nb\n```\n", {}))  # code as written
+
+
 if __name__ == "__main__":
     unittest.main()

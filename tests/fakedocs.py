@@ -11,7 +11,7 @@ rows at the end of another table; a link whose address is not http, https or mai
 write is all or nothing."""
 import copy, hashlib, html, json, os, re
 
-from docmodel.blocks import aligns_of, head_and_rest, ITEM, items_of, kind_of, list_kind, rows_of, split_blocks
+from docmodel.blocks import aligns_of, ITEM, items_of, kind_of, list_kind, rows_of, split_blocks
 from docmodel.inline import link_end
 from docmodel.markdown import CHIP, server_md
 from docmodel.tree import elements, parse
@@ -113,6 +113,14 @@ def chip_el(spec):
     raise AssertionError(f"chip {spec} in a paragraph")
 
 
+def item_head(body):
+    """A list item's first paragraph and the rest: the paragraph ends at a blank line or at a line that starts a block,
+    such as a nested list right under it (as the server read it on a live doc, 2026-10-18)."""
+    starts = re.compile(r"(#{1,6}\s|>|\||```)")
+    n = next((k for k, l in enumerate(body) if k and (not l.strip() or ITEM.match(l) or starts.match(l))), len(body))
+    return body[:n], body[n:]
+
+
 def paragraph(md, chips, heading=None):
     return el("paragraph", runs(md, chips), heading=heading)
 
@@ -151,7 +159,7 @@ def block(text, chips):
         lists = []
         for lines, checked in items_of(text):
             body = [ITEM.sub("", lines[0], count=1)] + dedent(lines[1:])
-            head, rest = head_and_rest(body)
+            head, rest = item_head(body)
             item = el("listItem", [paragraph("\n".join(head), chips)] + blocks("\n".join(rest), chips),
                       checked="true" if checked else None)
             ik = "check" if checked is not None else lk if lk != "check" else "bullet"
