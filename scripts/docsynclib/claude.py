@@ -1,12 +1,14 @@
 """Claude Code settings. Two plugins from the `wowgs` marketplace: docs-local (the /docs-local command, docsync,
-the hook) is on everywhere; docs-local-files (the skill that says the docs are local) is off in user settings and
-on in each project's .claude/settings.local.json, where the Docs tools that write are also off, except comments:
-`create` stays, and the guard lets it make only comments (object "utterance"). The deny rules name the terminal's
-server (claude_ai_Claude_Docs); the guard (`decide`, run by the hooks module) also refuses the tools that write under
-the desktop app's server name."""
+the hook) is on everywhere; docs-local-files (the skill that says how the docs are kept) is off in user settings and
+on in each project's .claude/settings.local.json. There an allow rule lets the skill run its guide script when it
+loads (Claude Code asks for such a command otherwise, outside auto and bypass modes). In a project that syncs, the
+Docs tools that write are also off, except comments: `create` stays, and the guard lets it make only comments (object
+"utterance"). The deny rules name the terminal's server (claude_ai_Claude_Docs); the guard (`decide`, run by the
+hooks module) also refuses the tools that write under the desktop app's server name. A project in mode "local" keeps
+no doc in Claude Docs: neither the deny rules nor the guard apply to it."""
 import json, os
 
-from .projects import project_of, projects, register, unregister
+from .projects import LOCAL, mode_of, project_of, projects, register, unregister
 from .textio import load_json, write
 
 CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
@@ -15,6 +17,7 @@ PLUGIN = "docs-local@" + MARKET
 FILES = "docs-local-files@" + MARKET
 DOCS_TOOL = "mcp__claude_ai_Claude_Docs__"
 DENY = [DOCS_TOOL + t for t in ("batch", "update", "delete")]
+GUIDE = "Bash(python3 *docs_local_guide.py*)"  # the command the files skill runs when it loads (files/SKILL.md)
 WRITES = ("create", "batch", "update", "delete")  # the Docs tools the guard covers (WRITES in hooks/bridge.ts)
 
 
@@ -41,19 +44,39 @@ def prune(s, *keys):
             del o[keys[n - 1]]
 
 
-def lock(s):
-    """A project's settings: the files skill on, the Docs tools that write off."""
+def lock(s, mode=None):
+    """A project's settings for its mode: the files skill on and its guide allowed to run; in a mode that syncs, the
+    Docs tools that write off; in mode "local", those deny rules gone."""
     s.setdefault("enabledPlugins", {})[FILES] = True
-    rules = s.setdefault("permissions", {}).setdefault("deny", [])
+    allow = s.setdefault("permissions", {}).setdefault("allow", [])
+    if GUIDE not in allow:
+        allow.append(GUIDE)
+    if mode == LOCAL:
+        drop_deny(s)
+        return
+    rules = s["permissions"].setdefault("deny", [])
     rules += [t for t in DENY if t not in rules]
+
+
+def lock_for(root):
+    """lock() with the project's mode, for edit_json."""
+    mode = mode_of(root)
+    return lambda s: lock(s, mode)
+
+
+def drop_deny(s):
+    if "deny" in s.get("permissions", {}):
+        s["permissions"]["deny"] = [t for t in s["permissions"]["deny"] if t not in DENY]
+    prune(s, "permissions", "deny")
 
 
 def unlock(s):
     s.get("enabledPlugins", {}).pop(FILES, None)
     prune(s, "enabledPlugins")
-    if "deny" in s.get("permissions", {}):
-        s["permissions"]["deny"] = [t for t in s["permissions"]["deny"] if t not in DENY]
-    prune(s, "permissions", "deny")
+    drop_deny(s)
+    if "allow" in s.get("permissions", {}):
+        s["permissions"]["allow"] = [t for t in s["permissions"]["allow"] if t != GUIDE]
+    prune(s, "permissions", "allow")
 
 
 def hide(s):
@@ -78,9 +101,9 @@ def project_settings(root):
 
 
 def turn_on(root):
-    """A project: in the user config, and its Claude Code settings (files skill on, Docs writes off)."""
+    """A project: in the user config, and its Claude Code settings for its mode (lock)."""
     register(root)
-    edit_json(project_settings(root), lock)
+    edit_json(project_settings(root), lock_for(root))
 
 
 def turn_off(root):
@@ -113,9 +136,11 @@ def doc_of(tool_input):
 
 
 def local_docs():
-    """The ids of every doc that a project of this user keeps as files."""
+    """The ids of every doc that a project of this user keeps as files and syncs (not one in mode "local")."""
     ids = set()
     for root in projects():
+        if mode_of(root) == LOCAL:
+            continue
         try:
             ids |= {d.get("id") for d in load_json(os.path.join(root, "docsync.json")).get("docs", {}).values()
                     if isinstance(d, dict)}
@@ -132,8 +157,11 @@ def decide(call_input):
     if tool not in WRITES:
         return None
     cwd = call_input.get("cwd")
-    if cwd and not project_of(cwd) and doc_of(call_input.get("tool_input") or {}) not in local_docs():
-        return None  # neither a session in a project nor a doc that one keeps as files
+    root = project_of(cwd) if cwd else None
+    if root and mode_of(root) == LOCAL:
+        root = None  # a project in mode "local" keeps no doc in Claude Docs
+    if cwd and not root and doc_of(call_input.get("tool_input") or {}) not in local_docs():
+        return None  # neither a session in a project that syncs nor a doc that one keeps as files
     if tool == "create" and call_input.get("tool_input", {}).get("object") == "utterance":
         return None
     return deny("this project's docs are local files; edit those instead (Docs tools may only write comments here)")

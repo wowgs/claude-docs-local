@@ -9,24 +9,25 @@ The plugins are installed once with `claude plugin install docs-local --marketpl
 1. **Sync mode.** If `docsync project check` prints `"setup": true`, a mode is saved: skip this question and leave out `--mode` in step 3. Otherwise ask exactly this with AskUserQuestion:
    ```json
    {"questions": [{
-     "question": "Who syncs your local docs with claude.ai?",
-     "header": "Sync",
+     "question": "Should your docs also live in claude.ai Docs?",
+     "header": "Docs",
      "multiSelect": false,
      "options": [
+       {"label": "Local only (Recommended)", "description": "The docs are markdown files in the project, with diagrams as SVG files. Nothing is synced with claude.ai and no hook runs a sync."},
        {"label": "Sync", "description": "When Claude finishes a turn with local edits, a sync sends them and brings the doc's changes. Safe when other people edit the same docs: if a tab changed on both sides, Claude merges both versions."},
        {"label": "Push", "description": "When Claude finishes a turn, a sync runs in the background, both ways. If a tab changed on both sides, the changes are merged block by block, and the local file wins where both changed the same block. For docs that only you edit, here and on claude.ai."},
        {"label": "I do (not recommended)", "description": "You run `docsync` yourself when you want. Claude only edits the local files. Claude does not learn about conflicts or about a comment for Claude that holds a tab back, and new docs do not show in the session's outputs."}
      ]
    }]}
    ```
-   "Sync" → `--mode turn --conflicts merge`; "Push" → `--mode turn --conflicts local`; "I do (not recommended)" → `--mode manual`.
+   "Local only (Recommended)" → `--mode local`; "Sync" → `--mode turn --conflicts merge`; "Push" → `--mode turn --conflicts local`; "I do (not recommended)" → `--mode manual`.
 2. **Projects.** Only if step 1 asked. Run `docsync setup scan` and take its `unknown` projects. If there are none, or it returns a `note`, skip this step. Otherwise ask with AskUserQuestion:
    - Split the projects into the fewest groups of at most 4. Make the groups as equal as possible: 5 = 3 + 2, 8 = 4 + 4, 9 = 3 + 3 + 3.
    - Ask one group per AskUserQuestion call, with one question in it. Wait for the answer before you ask about the next group.
    - Each group is a multiSelect question. Its options are the projects: `label` and `path` from the scan. For example:
      ```json
      {"questions": [{
-       "question": "Which of these projects should keep their Claude Docs as local files?",
+       "question": "Which of these projects should keep their docs with docs-local?",
        "header": "Projects 1/2",
        "multiSelect": true,
        "options": [
@@ -37,9 +38,9 @@ The plugins are installed once with `claude plugin install docs-local --marketpl
      }]}
      ```
    - If there is only one project, ask the same question with the options "Yes" and "No".
-3. **Run** `docsync setup` with the options of step 1, plus `--project <path>` for each project chosen in step 2. `--mode` is the default for this machine; `/docs-local mode <manual|turn>` gives one project a mode of its own. `--conflicts` goes into each chosen project's `docsync.json`; `/docs-local conflicts <merge|local>` changes it for one project.
+3. **Run** `docsync setup` with the options of step 1, plus `--project <path>` for each project chosen in step 2. `--mode` is the default for this machine; `/docs-local mode <manual|turn|local>` gives one project a mode of its own. `--conflicts` goes into each chosen project's `docsync.json`; `/docs-local conflicts <merge|local>` changes it for one project.
 4. **Tell the user in one line** whether docs-local is installed (`ok` in the output); add the `todo` lines, or the `errors` if `ok` is false.
-5. If the working folder is one of the projects, follow "Import" below.
+5. If the working folder is one of the projects and its mode is not `local`, follow "Import" below.
 
 ## Import
 

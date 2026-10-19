@@ -4,7 +4,7 @@ projects whose conflicts are "local" and wakes Claude when the sync fails (async
 import argparse, json, os, subprocess, sys, time
 
 from . import manifest
-from .claude import decide, edit_json, lock, project_settings
+from .claude import decide, edit_json, lock_for, project_settings
 from .errors import RunError
 from .files import PUSH, SVC
 from .manifest import local_wins
@@ -26,7 +26,7 @@ def session_start(event):
     installed brings its settings in. Nothing is written when they are already right."""
     root = project_of(event.get("cwd") or os.getcwd())
     if root:
-        edit_json(project_settings(root), lock)
+        edit_json(project_settings(root), lock_for(root))
 
 def sync_now(root, force=False):  # force: only for an explicit --force; the policy comes from the manifest
     """One sync of a project, in this process, quietly. Returns (exit code, the problems as lines, why it stopped

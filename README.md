@@ -2,9 +2,11 @@
 
 A Claude Code plugin that makes Claude faster and cheaper at editing your claude.ai Docs. You keep reading and editing your docs on claude.ai as before. Claude edits a local markdown copy of each doc instead of changing the doc through the official Docs MCP, and docs-local syncs the copy back to the doc.
 
+A project can also keep its docs as local files only (mode `local`, recommended at setup): markdown in the repository, diagrams as SVG files that Claude writes next to them, and nothing synced with claude.ai. Claude's skill then teaches that format, and `docsync check` finds links, images and SVG files that a viewer would not show.
+
 Two settings say how a project syncs:
 
-- When: by hand (you run `docsync`), or when Claude finishes a turn. This is a setting of your machine, with a default and a choice per project.
+- When: by hand (you run `docsync`), when Claude finishes a turn, or never (`local`). This is a setting of your machine, with a default and a choice per project.
 - What happens to a tab changed both locally and in the doc: Claude merges both versions (`merge`, for docs that other people edit too), or the changes are merged block by block in the background and the local copy wins where both changed the same block (`local`, **for docs that only you edit**). This is a setting of the project, in `docsync.json`.
 
 A sync or a push changes only what changed in a tab: a paragraph, a heading, a list item, a table row or a table cell. A comment in the doc keeps its place while some of its words stay. If a push removes all the words of a comment, the comment stays open in the doc without a place. The doc does not let a push remove all the words of a comment that asks Claude and has no answer yet. Then the sync skips that tab and says that an open comment for Claude is in the way. When the project syncs at the end of Claude's turns, Claude gets that comment and answers it. When you sync by hand, answer or resolve the comment in the doc, or keep some of its words, and sync again. If docsync cannot make a change piece by piece, it rewrites the whole tab, and the comments in that tab lose their place.
@@ -25,9 +27,9 @@ Paste into Claude Code:
 Run `claude plugin install docs-local --marketplace https://wowgs.uk/plugins/marketplace.json && claude plugin install docs-local-files@wowgs`, then follow the plugin's `skills/docs-local/SETUP.md`.
 ```
 
-`/docs-local` turns a project on, `/docs-local remove` turns it off, `/docs-local mode <manual|turn>` and `/docs-local conflicts <merge|local>` set how it syncs, `/docs-local import` makes docs of its markdown files.
+`/docs-local` turns a project on, `/docs-local remove` turns it off, `/docs-local mode <manual|turn|local>` and `/docs-local conflicts <merge|local>` set how it syncs, `/docs-local import` makes docs of its markdown files.
 
-Needs: claude.ai login in Claude Code, Claude Docs connector, git, Python 3.9+.
+Needs: git, Python 3.9+. To sync with claude.ai: a claude.ai login in Claude Code and the Claude Docs connector.
 
 Tested on macOS and Linux. Windows: best effort :)
 

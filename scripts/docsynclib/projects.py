@@ -1,9 +1,11 @@
 """The user config: the only list of projects, when this machine syncs by default, and each project's own choice.
 
-{"schema": 3, "sync": "manual" | "turn", "projects": {"<project root>": {"sync": "manual" | "turn"}}}
+{"schema": 3, "sync": "manual" | "turn" | "local", "projects": {"<project root>": {"sync": "manual" | "turn" | "local"}}}
 
-sync: "manual" — the user runs docsync; "turn" — a hook syncs when Claude finishes a turn. What a sync does with a tab
-changed on both sides is the project's "conflicts" in its docsync.json (manifest.py), not a setting of this machine."""
+sync: "manual" — the user runs docsync; "turn" — a hook syncs when Claude finishes a turn; "local" — the docs are local
+markdown files only: docsync never syncs them, no hook acts and no bridge runs, and Claude Docs is not touched. What a
+sync does with a tab changed on both sides is the project's "conflicts" in its docsync.json (manifest.py), not a
+setting of this machine."""
 import os, platform
 
 from . import manifest
@@ -11,8 +13,8 @@ from .manifest import CONFIG
 from .textio import load_json, save_json
 
 SCHEMA = 3  # a change is a breaking update (CHANGELOG.md); docsync moves an older config to it when it reads it
-MANUAL, TURN = "manual", "turn"  # when this machine syncs: when the user runs docsync, when Claude finishes a turn
-MODES = (MANUAL, TURN)
+MANUAL, TURN, LOCAL = "manual", "turn", "local"  # when this machine syncs: when the user runs docsync, when Claude
+MODES = (MANUAL, TURN, LOCAL)  # finishes a turn, or never (the docs stay local files only)
 OLD = {"user": MANUAL, "model": TURN, "auto": TURN, "auto-force": TURN}  # modes before 4.0
 
 

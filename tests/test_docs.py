@@ -39,8 +39,21 @@ class Paths(unittest.TestCase):
         self.assertEqual(name("skills", "docs-local", "SKILL.md"), "docs-local")
         self.assertEqual(name("files", "SKILL.md"), "docs-local-files")
 
-    def test_the_files_plugin_names_no_root_path_it_does_not_ship(self):
-        self.assertEqual(ROOT_VAR.findall(text("files", "SKILL.md")), [])
+    def test_the_files_plugin_names_only_root_paths_it_ships(self):
+        paths = ROOT_VAR.findall(text("files", "SKILL.md"))
+        self.assertEqual(paths, ["docs_local_guide.py"])
+        for p in paths:
+            self.assertTrue(os.path.isfile(os.path.join(REPO, "files", p)), p)
+
+    def test_the_files_skill_runs_its_guide_as_the_allow_rule_names_it(self):
+        from docsynclib import claude
+        line = next(l for l in text("files", "SKILL.md").splitlines() if l.startswith("!`"))
+        command = line[2:-1]
+        self.assertTrue(command.startswith("python3 "), command)  # Bash(python3 *docs_local_guide.py*) matches it
+        self.assertEqual(claude.GUIDE, "Bash(python3 *docs_local_guide.py*)")
+        self.assertIn("docs_local_guide.py", command)
+        for name in ("sync", "local"):
+            self.assertTrue(os.path.isfile(os.path.join(REPO, "files", "guides", name + ".md")), name)
 
 
 class Setup(unittest.TestCase):

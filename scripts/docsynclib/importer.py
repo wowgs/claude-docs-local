@@ -8,7 +8,7 @@ import json, os, re, sys
 
 from . import manifest
 from .files import Files, posix, slug, SVC
-from .projects import project_manifest, project_name, project_of
+from .projects import LOCAL, mode_of, project_manifest, project_name, project_of
 from .push import ARTIFACT
 from .sync import cmd_sync
 from docmodel.compare import h1
@@ -88,6 +88,9 @@ def cmd_import(args, report):
     if args.check:
         print(json.dumps({f: check(root, f) for f in files}, ensure_ascii=False, indent=1))
         return
+    if mode_of(root) == LOCAL:
+        sys.exit("this project's docs are local files only (mode local): there is nothing to import them into. To "
+                 "sync them with Claude Docs: docsync project mode turn (or manual)")
     cfg = project_manifest(root)
     taken = manifest.mapped(cfg)
     for f in files:

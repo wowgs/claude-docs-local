@@ -24,10 +24,13 @@ list items and table rows that changed, so a comment keeps its place while some 
   docsync project name <name>   the project's name
   docsync project list      your projects
   docsync project check | use [--mode M] | remove   for /docs-local: this folder's state, turn local docs on, off
-  docsync project mode manual|turn|default   when this machine syncs this project
+  docsync project mode manual|turn|local|default   when this machine syncs this project; local: never
   docsync project conflicts merge|local   a tab changed on both sides: Claude merges, or the local file wins
   docsync setup scan        for the model during setup: folders Claude Code has worked in
-  docsync setup --mode manual|turn [--conflicts merge|local] [--project <folder>]...   for the model during setup
+  docsync setup --mode manual|turn|local [--conflicts merge|local] [--project <folder>]...   for the model during
+                            setup
+  docsync check [FILE...]   links and images that point to no file, SVG files that viewers would not show (for
+                            the model, after it writes docs)
   docsync uninstall         remove the docsync command and settings; docs stay
 
 Project: a root in your config, with the manifest docsync.json there (in git): each doc's id, name, folder for new
@@ -36,7 +39,7 @@ their doc's folder; files elsewhere, such as README.md, stay where they are. Eac
 picture are in .docsync/<doc key>/; this machine's sync state in .docsync/state.json (not in git). An older project is
 moved to this layout the first time docsync reads it.
 Your settings and projects: ~/.config/docsync/config.json ($XDG_CONFIG_HOME, %APPDATA% on Windows): when this machine
-syncs ("manual" or "turn"), by default and per project.
+syncs ("manual", "turn" or "local"), by default and per project.
 Claude Code: plugins docs-local and docs-local-files from the wowgs marketplace; docs-local-files is off in
 ~/.claude/settings.json and on in each project's .claude/settings.local.json, which also turns off the Docs tools
 that write, except comments. Claude Code updates the plugins (claude plugin update).
@@ -44,7 +47,8 @@ Login: none of its own. Run in a Claude Code session, docsync calls the Claude D
 (the plugin's hooks module starts `docsync bridge` and sets DOCSYNC_BRIDGE); elsewhere it uses Claude Code's stored
 claude.ai login, read on each run and never stored by docsync.
 Nothing is deleted locally: removed files go to .docsync-trash/<time>/ at the project root.
-When: "manual" (you run docsync) or "turn" (a hook syncs when Claude finishes a turn). Conflicts: "merge" (a conflict
+When: "manual" (you run docsync), "turn" (a hook syncs when Claude finishes a turn) or "local" (never: the docs are
+local markdown files only, with diagrams as SVG files; no hook acts and Claude Docs is not touched). Conflicts: "merge" (a conflict
 is for Claude or you to merge; the hook syncs at once) or "local" (merged block by block; the hook syncs in the
 background).
 Output: for people; one JSON document with --json.
@@ -53,8 +57,8 @@ differently); 2 conflicts.
 """
 import argparse, json, os, platform, re, shutil, sys
 
-from . import bridge, importer, manifest, remote
-from .claude import (edit_json, FILES, hide, installed, lock, PLUGIN, project_settings, turn_off, turn_on, unhide,
+from . import bridge, checkdocs, importer, manifest, remote
+from .claude import (edit_json, FILES, hide, installed, lock_for, PLUGIN, project_settings, turn_off, turn_on, unhide,
                      unlock, user_settings)
 from .errors import brief, RunError
 from .files import base_for, Files, locked, posix, slug, TRASH
@@ -63,8 +67,8 @@ from .manifest import CONFLICTS
 from .mcp import call
 from .output import COUNTED, Report
 from .project import Project, Tab
-from .projects import (load_user, mode_of, MODES, project_manifest, project_name, project_of, project_state, projects,
-                       save_user, set_mode, targets, user_config)
+from .projects import (LOCAL, load_user, mode_of, MODES, project_manifest, project_name, project_of, project_state,
+                       projects, save_user, set_mode, targets, user_config)
 from .push import ARTIFACT
 from .sync import cmd_sync, drop_doc
 from .tabfile import keep_doc_copy
@@ -82,8 +86,16 @@ def doc_id_from(link):
     return m.group(1)
 
 
+def not_local(root):
+    """Stop a command that needs Claude Docs in a project whose mode is "local"."""
+    if root and mode_of(root) == LOCAL:
+        sys.exit("this project's docs are local files only (mode local): docsync does not sync them. To sync them "
+                 "with Claude Docs: docsync project mode turn (or manual)")
+
+
 def doc_add(args, report):
     root = project_of(os.getcwd()) or os.path.realpath(os.getcwd())
+    not_local(project_of(os.getcwd()))
     report.project = project_name(root)
     doc_id = doc_id_from(args.link)
     report.status("reading the doc")
@@ -258,8 +270,9 @@ def project_check(args, report):
     setup ran."""
     state, root = project_state(os.getcwd())
     if root:
-        edit_json(project_settings(root), lock)
-    print(json.dumps({"state": state, "root": root, "setup": load_user().get("sync") in MODES}))
+        edit_json(project_settings(root), lock_for(root))
+    print(json.dumps({"state": state, "root": root, "mode": mode_of(root) if root else None,
+                      "setup": load_user().get("sync") in MODES}))
 
 
 def project_use(args, report):
@@ -268,6 +281,7 @@ def project_use(args, report):
     turn_on(root)
     if args.mode:
         set_mode(root, args.mode)
+        edit_json(project_settings(root), lock_for(root))
     print(json.dumps({"state": "local", "root": root, "mode": mode_of(root)}))
 
 
@@ -277,6 +291,7 @@ def project_mode(args, report):
     if not root:
         sys.exit("not in a project")
     set_mode(root, None if args.mode == "default" else args.mode)
+    edit_json(project_settings(root), lock_for(root))  # the settings of the new mode: deny rules on or off
     print(json.dumps({"root": root, "mode": mode_of(root), "own": args.mode != "default"}))
 
 
@@ -377,7 +392,7 @@ def setup(args, report):
     first = "sync" not in u
     mode = args.mode or u.get("sync")
     if mode not in MODES:
-        sys.exit("no saved mode: ask the user, then run docsync setup --mode manual|turn")
+        sys.exit("no saved mode: ask the user, then run docsync setup --mode manual|turn|local")
     u["sync"] = mode
     if args.conflicts:
         u["conflicts"] = args.conflicts  # also the default of the projects turned on later
@@ -401,7 +416,7 @@ def setup(args, report):
             set_conflicts(root, args.conflicts)
     for r in projects():
         if os.path.isdir(r):
-            edit_json(project_settings(r), lock)
+            edit_json(project_settings(r), lock_for(r))
     shell = None
     shell, err = shell_command()  # the `docsync` command for people, whatever the mode
     if err:
@@ -453,6 +468,11 @@ def run_sync(args, report):
         if n and not report.json:
             report.say()
         report.begin_project(project_name(root))
+        if mode_of(root) == LOCAL:  # never synced: one line says so
+            report.ev("info", ".", "mode local: the docs are local files only, not synced")
+            report.end_project(summary=False)
+            result.append({"project": report.project, "root": root, "mode": LOCAL})
+            continue
         try:
             cmd_sync(root, args, args.cmd, report)
         finally:
@@ -531,6 +551,8 @@ def parser():
     sub.add_parser("hook-wake", help="for Claude Code: the background Stop hook of a project whose conflicts are local")
     sub.add_parser("sync-background", help="for that hook: sync --force, result in .docsync/push.json")
     sub.add_parser("bridge", help="for the plugin's hooks module: the broker to the session's Claude Docs connector")
+    a = sub.add_parser("check", help="links and images to no file, SVG files that viewers would not show")
+    a.add_argument("files", nargs="*", help="markdown or SVG files (default: every markdown file of the project)")
     sub.add_parser("uninstall", help="remove the docsync command and settings; docs stay")
     return p
 
@@ -558,6 +580,7 @@ COMMANDS = {
     "sync-background": {None: lambda args, report: sync_background()},
     "bridge": {None: lambda args, report: bridge.serve()},
     "uninstall": {None: uninstall},
+    "check": {None: checkdocs.cmd_check},
 }
 
 

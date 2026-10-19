@@ -132,7 +132,12 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 
 def serve(folder=None):
-    """`docsync bridge`: run the broker until the module that started it ends it (it kills this process)."""
+    """`docsync bridge`: run the broker until the module that started it ends it (it kills this process). In a
+    project whose mode is "local" there is no broker: it ends at once, and the hooks module starts none."""
+    from .projects import LOCAL, mode_of, project_of
+    root = project_of(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    if root and mode_of(root) == LOCAL:
+        return
     folder = folder or tempfile.mkdtemp(prefix="docsync-bridge-")
     path = os.path.join(folder, "s")
     server = Server(path, Handler)

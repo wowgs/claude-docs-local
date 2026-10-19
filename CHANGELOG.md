@@ -2,6 +2,13 @@
 
 One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
 
+## 4.4.0 — 2026-10-19
+
+- **Mode `local`: the docs are local files only.** A third value of `sync`, beside `manual` and `turn`, set as the machine's default (`docsync setup --mode local`) or for one project (`docsync project mode local`, `/docs-local mode local`). Setup offers it first, as the recommended one. In such a project the docs are markdown files in the repository and diagrams are SVG files next to them. docsync never syncs it: `sync`, `status`, `pull` and `push` pass it with one line, and `doc add` and `doc import` refuse. The Stop hook does nothing there, the bridge does not start, the guard on the Docs tools leaves it alone, and its settings have no deny rules for them. Projects already set up keep their mode.
+- **The files skill shows the guide of the project's mode.** Its SKILL.md runs `docs_local_guide.py` when it loads, which reads the project's mode from docsync's user config and prints `guides/local.md` (markdown, SVG diagrams, `docsync check`) or `guides/sync.md` (the guide so far). Every project's settings now allow that command (`Bash(python3 *docs_local_guide.py*)`), since Claude Code asks for it otherwise outside auto and bypass modes (checked with `claude -p`, Claude Code 2.1.300).
+- **`docsync check [FILE...]`** reports links and images that point to no file, SVG files that a viewer would not show (not SVG, no viewBox, scripts, foreign objects, images from other files, no text), and in mode `local` chips of Claude Docs left in the text.
+- `docsync project check` also prints the project's mode.
+
 ## 4.3.0 — 2026-10-16
 
 - **`docsync doc remove <doc key> [--delete-doc]` takes a doc out of a project.** The doc leaves `docsync.json` and the sync state. Its tab files in its folder, its own files in `.docsync/<doc key>/` and its merge bases go to `.docsync-trash/`, and its folder goes when nothing else is left in it. Tab files elsewhere, such as `README.md`, stay. The doc on claude.ai stays, or with `--delete-doc` it is deleted: docsync first keeps the text of each of its tabs in the trash, and when the doc refuses the delete, nothing changes locally. The delete goes with Claude Code's stored login, since a session's bridge does not pass a doc deleted. Not checked against the server: whether a delete of a whole doc works and whether it can be undone. A probe on an id that is no doc's got `deny` `access`, which the server also answers for a doc not shared.
