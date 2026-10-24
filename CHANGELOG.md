@@ -1,6 +1,19 @@
 # Changelog
 
-One section per version, newest first. A change to the structure of the user config or of `docsync.json` is a breaking change (major version): `docsync` itself changes the files to the new structure when it reads them, since Claude Code updates the plugins without running setup again.
+One section per version, newest first. A change that needs you to do something after an update is a major version.
+
+## 5.0.0 — 2026-10-23
+
+docs-local now keeps a project's docs as local files only. Nothing syncs with claude.ai Docs any more.
+
+- **One plugin, two skills.** `docs-local:docs` tells Claude where a project's docs go, how to write their markdown and how to draw diagrams and charts as SVG (`diagrams.md`). `docs-local:project on | off` turns the claude.ai Claude Docs connector off or on in a project, through `deniedMcpServers` in its `.claude/settings.local.json`.
+- **`docs-local check`** finds links and images that point to no file and SVG files that viewers would not show.
+- **Removed:** the sync with claude.ai Docs and every command of `docsync`, `docsync.json` and `.docsync/`, the user config `~/.config/docsync/`, the hooks and the bridge, the guard on the Docs tools, the second plugin `docs-local-files`, the modes, and the benchmark.
+
+After the update:
+- Uninstall the second plugin: `claude plugin uninstall docs-local-files@wowgs`, and in each project where it is on, take `docs-local-files@wowgs` out of `enabledPlugins` in `.claude/settings.local.json` (`/docs-local:project` does it).
+- Run `/docs-local:project` in each project that kept its docs with docs-local. It also takes out what 4.x wrote into its settings.
+- `~/.config/docsync/`, `~/.local/bin/docsync`, and in each project `docsync.json`, `.docsync/` and `.docsync-trash/` are no longer used.
 
 ## 4.5.1 — 2026-10-19
 

@@ -1,4 +1,0 @@
-#!/bin/sh
-# docsync for Claude's Bash tool: this folder is on its PATH while the plugin is enabled.
-S="$(dirname "$0")/../scripts/docsync.py"
-if command -v python3 >/dev/null 2>&1; then exec python3 "$S" "$@"; else exec python "$S" "$@"; fi

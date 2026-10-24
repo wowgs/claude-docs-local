@@ -5,9 +5,5 @@ __pycache__/
 # Claude Code settings of this machine
 .claude/
 
-# docs-local for this repo: its docs are kept out of git
+# this repo's docs: kept out of git
 docs/
-docsync.json
-/.docsync/
-# docs-local: old files kept by docsync
-/.docsync-trash/

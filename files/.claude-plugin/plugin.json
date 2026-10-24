@@ -1,9 +1,0 @@
-{
-  "name": "docs-local-files",
-  "version": "4.5.1",
-  "description": "In a project with local docs: Claude edits the docs as local files. Enabled per project by /docs-local.",
-  "author": {
-    "name": "wowgs"
-  },
-  "repository": "https://github.com/wowgs/claude-docs-local"
-}

@@ -1,7 +1,7 @@
 {
   "name": "docs-local",
-  "version": "4.5.1",
-  "description": "/docs-local turns local docs on or off for a project; docsync syncs them with claude.ai Docs.",
+  "version": "5.0.0",
+  "description": "A project's docs as markdown files in its repository, with diagrams as SVG files; /docs-local:project turns the Claude Docs connector off in a project.",
   "author": {
     "name": "wowgs"
   },
