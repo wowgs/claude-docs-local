@@ -44,6 +44,12 @@ class Skills(unittest.TestCase):
             p = json.load(f)
         self.assertEqual(p["name"], "docs-local")
         self.assertTrue(os.access(os.path.join(REPO, "bin", "docs-local"), os.X_OK))
+        if os.path.isdir(os.path.join(REPO, ".git")):  # what ships is what git has: no skill file ignored
+            import subprocess
+            on_disk = sorted(os.path.relpath(os.path.join(d, f), REPO) for d, _, fs in os.walk(os.path.join(REPO, "skills"))
+                             for f in fs)
+            tracked = subprocess.run(["git", "-C", REPO, "ls-files", "skills"], capture_output=True, text=True).stdout
+            self.assertEqual(on_disk, sorted(tracked.split()))
         for gone in ("hooks", "files", "scripts/docsynclib", "scripts/docmodel"):
             self.assertFalse(os.path.exists(os.path.join(REPO, gone)), gone)
 
