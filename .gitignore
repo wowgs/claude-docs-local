@@ -6,4 +6,4 @@ __pycache__/
 .claude/
 
 # this repo's docs: kept out of git
-docs/
+/docs/
